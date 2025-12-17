@@ -1,0 +1,433 @@
+import React, { useEffect, useMemo, useState } from "react";
+import Papa from "papaparse";
+import {
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis,
+  CartesianGrid, Tooltip, Legend
+} from "recharts";
+
+/* ---------- helpers ---------- */
+function parseDMY(dateStr) {
+  if (!dateStr) return null;
+  const s = String(dateStr).trim();
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (m) {
+    const dd = +m[1], mm = +m[2], yy = m[3];
+    const yyyy = yy.length===2 ? (+yy>50 ? 1900+ +yy : 2000+ +yy) : +yy;
+    const d = new Date(yyyy, (mm||1)-1, dd||1);
+    return isNaN(+d) ? null : d;
+  }
+  const d = new Date(s);
+  return isNaN(+d) ? null : d;
+}
+const toNum = (v) => {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = parseFloat(s.replace(/[^\d.\-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+};
+const norm = (k) => String(k ?? "").toLowerCase().replace(/\uFEFF/g,"").trim();
+const fmt = (n, max=2) => typeof n === "number" ? n.toLocaleString("en-GB", { maximumFractionDigits: max }) : n;
+const toInputDate = (d) => {
+  if (!(d instanceof Date)) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,"0");
+  const day = String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+};
+const toIsoDate = (d) => {
+  const y=d.getUTCFullYear();
+  const m=String(d.getUTCMonth()+1).padStart(2,"0");
+  const day=String(d.getUTCDate()).padStart(2,"0");
+  return `${y}-${m}-${day}`;
+};
+
+/* CSV first; API only for most recent day */
+async function fetchCSVText() {
+  const urls = ["/prices.csv", "/data/prices.csv"];
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) { lastErr = new Error(`CSV HTTP ${res.status} for ${url}`); continue; }
+      const ct = (res.headers.get("content-type")||"").toLowerCase();
+      const textRaw = await res.text();
+      if (ct.includes("text/html") || /^\s*<!doctype/i.test(textRaw)) { lastErr = new Error(`Got HTML from ${url}`); continue; }
+      return textRaw.replace(/^\uFEFF/, "");
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error("prices.csv not found at / or /data/");
+}
+async function fetchLatestFromAPI() {
+  try {
+    const key = import.meta?.env?.VITE_METAL_API_KEY || "98ce31de34ecaadcd00d49d12137a56a";
+    const url = `https://api.metalpriceapi.com/v1/latest?api_key=${key}&base=USD&currencies=XAU,XAG`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`API HTTP ${res.status}`);
+    const json = await res.json();
+    const rXAU = Number(json?.rates?.XAU);
+    const rXAG = Number(json?.rates?.XAG);
+    if (!(rXAU > 0) || !(rXAG > 0)) throw new Error("API missing XAU/XAG");
+    const goldUSD   = 1 / rXAU;  // USD/oz
+    const silverUSD = 1 / rXAG;
+    const todayUTC = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+    return { ok: true, row: { date: todayUTC, gold: goldUSD, silver: silverUSD, gsr: goldUSD / silverUSD } };
+  } catch (e) {
+    console.warn("MetalPriceAPI latest failed:", e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+/* ---------- component ---------- */
+export default function App() {
+  const [rows, setRows] = useState([]);
+  const [err,  setErr]  = useState("");
+
+  // visibility toggles
+  const [show, setShow] = useState({ gold: true, silver: true, gsr: true, strategy: true });
+
+  // inputs
+  const [amount, setAmount] = useState(1000);
+  const [startDateStr, setStartDateStr] = useState("");
+  const [endDateStr,   setEndDateStr]   = useState("");
+
+  // switching strategy params
+  const [startMetal, setStartMetal] = useState("gold"); // "gold" | "silver"
+  const [thG2S, setThG2S] = useState(85); // switch Gold -> Silver when GSR crosses UP to >= thG2S
+  const [thS2G, setThS2G] = useState(65); // switch Silver -> Gold when GSR crosses DOWN to <= thS2G
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const text   = await fetchCSVText();
+        const lines  = text.split(/\r?\n/);
+        const header = (lines.find(l => l.trim().length>0) || "");
+        const pref   = header.includes("\t") ? "\t" : (header.includes(";") ? ";" : ",");
+
+        let parsed = Papa.parse(text, { header:true, skipEmptyLines:true, delimiter:"", newline:"" });
+        let mapped = (parsed.data||[]).map(o=>{
+          const m={}; for (const k in o) m[norm(k)] = o[k];
+          const gold   = toNum(m.gold);
+          const silver = toNum(m.silver);
+          const date   = parseDMY(m.date);
+          const gsr    = (gold!=null && silver!=null && silver!==0) ? (gold / silver) : null;
+          return { date, gold, silver, gsr };
+        }).filter(d=> d.date && d.gold!==null && d.silver!==null && d.gsr!==null);
+
+        if (!mapped.length) {
+          parsed = Papa.parse(text, { header:true, skipEmptyLines:true, delimiter:pref });
+          mapped = (parsed.data||[]).map(o=>{
+            const m={}; for (const k in o) m[norm(k)] = o[k];
+            const gold   = toNum(m.gold);
+            const silver = toNum(m.silver);
+            const date   = parseDMY(m.date);
+            const gsr    = (gold!=null && silver!=null && silver!==0) ? (gold / silver) : null;
+            return { date, gold, silver, gsr };
+          }).filter(d=> d.date && d.gold!==null && d.silver!==null && d.gsr!==null);
+        }
+
+        if (!mapped.length) {
+          const split = (line)=> line.split(pref).map(c=>c.replace(/^\uFEFF/,"").trim());
+          const hdr = split(lines[0]).map(h=>norm(h));
+          const id = hdr.indexOf("date"), ig = hdr.indexOf("gold"), is = hdr.indexOf("silver");
+          mapped = lines.slice(1).filter(l=>l.trim().length>0).map(line=>{
+            const c = split(line);
+            const date   = parseDMY(id>=0?c[id]:c[0]);
+            const gold   = toNum(ig>=0?c[ig]:c[1]);
+            const silver = toNum(is>=0?c[is]:c[2]);
+            const gsr    = (gold!=null && silver!=null && silver!==0) ? (gold / silver) : null;
+            return { date, gold, silver, gsr };
+          }).filter(d=> d.date && d.gold!==null && d.silver!==null && d.gsr!==null);
+        }
+
+        mapped.sort((a,b)=> a.date - b.date);
+
+        if (mapped.length) {
+          if (!startDateStr) setStartDateStr(toInputDate(mapped[0].date));
+          if (!endDateStr)   setEndDateStr(toInputDate(mapped[mapped.length - 1].date));
+        }
+
+        // top-up to today
+        try {
+          if (mapped.length) {
+            const last = mapped[mapped.length - 1].date;
+            const todayUTC = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+            if (last < todayUTC) {
+              const api = await fetchLatestFromAPI();
+              if (api.ok && api.row?.date && api.row.date.getUTCFullYear() >= 1990) {
+                const seen = new Set(mapped.map(r => toIsoDate(r.date)));
+                const key  = toIsoDate(api.row.date);
+                if (!seen.has(key)) mapped.push(api.row);
+                mapped.sort((a,b)=> a.date - b.date);
+                if (!endDateStr) setEndDateStr(toInputDate(mapped[mapped.length - 1].date));
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Top-up merge failed:", e);
+        }
+
+        setRows(mapped);
+      } catch (e) {
+        setErr(String(e.message||e));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* Base value (USD) lines for the initial amount */
+  const valuedRows = useMemo(() => {
+    if (!rows.length) return [];
+    const desiredStart = startDateStr || toInputDate(rows[0].date);
+    const idx = rows.findIndex(r => toInputDate(r.date) >= desiredStart);
+    const startIdx = idx >= 0 ? idx : 0;
+    const start = rows[startIdx];
+    if (!start) return [];
+
+    const goldOz   = amount > 0 && start.gold   > 0 ? amount / start.gold   : 0;
+    const silverOz = amount > 0 && start.silver > 0 ? amount / start.silver : 0;
+
+    return rows.map((r, i) => {
+      const goldValue   = i >= startIdx ? goldOz   * r.gold   : null;
+      const silverValue = i >= startIdx ? silverOz * r.silver : null;
+      return { ...r, goldValue, silverValue };
+    });
+  }, [rows, amount, startDateStr]);
+
+  /* Window between Start and End (inclusive) */
+  const windowed = useMemo(() => {
+    if (!valuedRows.length) return [];
+    const start = startDateStr ? new Date(startDateStr+"T00:00:00") : valuedRows[0].date;
+    const end   = endDateStr   ? new Date(endDateStr+"T23:59:59")  : valuedRows[valuedRows.length-1].date;
+    return valuedRows.filter(r => r.date >= start && r.date <= end);
+  }, [valuedRows, startDateStr, endDateStr]);
+
+  /* --- Strategy simulation (GSR switching) --- */
+  const strategyRows = useMemo(() => {
+    if (!windowed.length || amount <= 0) return [];
+    const start = windowed[0];
+    let goldOz   = 0;
+    let silverOz = 0;
+    let metal = (startMetal === "silver") ? "silver" : "gold";
+
+    if (metal === "gold")   goldOz   = start.gold   > 0 ? amount / start.gold   : 0;
+    if (metal === "silver") silverOz = start.silver > 0 ? amount / start.silver : 0;
+
+    const out = [];
+    let prevR = start.gsr;
+
+    for (let i = 0; i < windowed.length; i++) {
+      const r = windowed[i];
+      if (i > 0) {
+        const gsr = r.gsr;
+        if (metal === "gold" && Number.isFinite(thG2S) && prevR < thG2S && gsr >= thG2S) {
+          const value = goldOz * r.gold;
+          silverOz = value / r.silver;
+          goldOz = 0;
+          metal = "silver";
+        } else if (metal === "silver" && Number.isFinite(thS2G) && prevR > thS2G && gsr <= thS2G) {
+          const value = silverOz * r.silver;
+          goldOz = value / r.gold;
+          silverOz = 0;
+          metal = "gold";
+        }
+        prevR = gsr;
+      }
+      const strategyValue = metal === "gold" ? goldOz * r.gold : silverOz * r.silver;
+      out.push({ ...r, strategyValue, strategyMetal: metal });
+    }
+    return out;
+  }, [windowed, amount, startMetal, thG2S, thS2G]);
+
+  /* Count switches by detecting metal changes between consecutive days */
+  const switchCount = useMemo(() => {
+    if (strategyRows.length < 2) return 0;
+    let c = 0;
+    for (let i=1;i<strategyRows.length;i++){
+      if (strategyRows[i].strategyMetal !== strategyRows[i-1].strategyMetal) c++;
+    }
+    return c;
+  }, [strategyRows]);
+
+  /* Equalized USD Y-axis domain across Gold, Silver, Strategy */
+  const equalUsdDomain = useMemo(() => {
+    const vals = [];
+    for (const r of windowed) {
+      if (r.goldValue != null)   vals.push(r.goldValue);
+      if (r.silverValue != null) vals.push(r.silverValue);
+    }
+    for (const r of strategyRows) {
+      if (r.strategyValue != null) vals.push(r.strategyValue);
+    }
+    if (!vals.length) return ["auto","auto"];
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return ["auto","auto"];
+    const pad = (max - min) * 0.05 || (min || 1) * 0.05;
+    return [Math.max(0, min - pad), max + pad];
+  }, [windowed, strategyRows]);
+
+  /* Stats */
+  const stats = useMemo(() => {
+    if (!windowed.length) return { gv: amount, sv: amount, gchg: 0, schg: 0, gpct: 0, spct: 0 };
+    const end = windowed[windowed.length - 1];
+    const gv = end.goldValue   ?? amount;
+    const sv = end.silverValue ?? amount;
+    const gchg = gv - amount;
+    const schg = sv - amount;
+    const gpct = amount > 0 ? (gv/amount - 1) * 100 : 0;
+    const spct = amount > 0 ? (sv/amount - 1) * 100 : 0;
+    return { gv, sv, gchg, schg, gpct, spct };
+  }, [windowed, amount]);
+
+  const stratStats = useMemo(() => {
+    if (!strategyRows.length) return { v: amount, chg: 0, pct: 0 };
+    const last = strategyRows[strategyRows.length - 1];
+    const v = last.strategyValue ?? amount;
+    return { v, chg: v - amount, pct: amount > 0 ? (v/amount - 1) * 100 : 0 };
+  }, [strategyRows, amount]);
+
+  /* Performance vs Strategy (diff = Strategy − Benchmark, pct vs Benchmark) */
+  const compare = useMemo(() => {
+    if (!windowed.length) return {
+      switches: switchCount,
+      vsGold:  { diff: 0, pct: 0 },
+      vsSilver:{ diff: 0, pct: 0 }
+    };
+    const end = windowed[windowed.length - 1];
+    const gold = end.goldValue   ?? amount;
+    const silv = end.silverValue ?? amount;
+    const strat = stratStats.v ?? amount;
+
+    const diffG = strat - gold;
+    const pctG  = gold > 0 ? (strat / gold - 1) * 100 : 0;
+
+    const diffS = strat - silv;
+    const pctS  = silv > 0 ? (strat / silv - 1) * 100 : 0;
+
+    return {
+      switches: switchCount,
+      vsGold:   { diff: diffG, pct: pctG },
+      vsSilver: { diff: diffS, pct: pctS }
+    };
+  }, [windowed, stratStats, amount, switchCount]);
+
+  return (
+    <div style={{fontFamily:"system-ui, Segoe UI, Arial", color:"#e7ecf3", background:"#0b1220", minHeight:"100vh"}}>
+      <div style={{maxWidth:1100, margin:"32px auto", padding:"0 16px"}}>
+        <div style={{background:"#121a2a", border:"1px solid #1c2740", borderRadius:16, padding:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <h1>GSR APP</h1>
+          </div>
+
+          {/* controls */}
+          <div style={{display:"flex", flexWrap:"wrap", gap:16, alignItems:"center", margin:"0 0 12px 0", fontSize:14}}>
+            <label>Initial amount (USD):{" "}
+              <input type="number" min="0" step="50" value={amount} onChange={e=>setAmount(Math.max(0, Number(e.target.value)))} style={{width:120}}/>
+            </label>
+            <label>Start date:{" "}
+              <input type="date" value={startDateStr} onChange={e=>setStartDateStr(e.target.value)} />
+            </label>
+            <label>End date:{" "}
+              <input type="date" value={endDateStr} onChange={e=>setEndDateStr(e.target.value)} />
+            </label>
+
+            {/* Strategy controls */}
+            <span style={{width:1, flexBasis:"100%"}} />
+
+            <label>Starting metal:{" "}
+              <select value={startMetal} onChange={e=>setStartMetal(e.target.value)}>
+                <option value="gold">Gold</option>
+                <option value="silver">Silver</option>
+              </select>
+            </label>
+            <label>Switch Gold → Silver (GSR ≥):{" "}
+              <input type="number" step="1" value={thG2S} onChange={e=>setThG2S(Number(e.target.value))} style={{width:80}} />
+            </label>
+            <label>Switch Silver → Gold (GSR ≤):{" "}
+              <input type="number" step="1" value={thS2G} onChange={e=>setThS2G(Number(e.target.value))} style={{width:80}} />
+            </label>
+
+            <span style={{marginLeft:"auto"}} />
+            <label><input type="checkbox" checked={show.gold} onChange={e=>setShow(s=>({...s,gold:e.target.checked}))}/> Gold</label>
+            <label><input type="checkbox" checked={show.silver} onChange={e=>setShow(s=>({...s,silver:e.target.checked}))}/> Silver</label>
+            <label><input type="checkbox" checked={show.gsr} onChange={e=>setShow(s=>({...s,gsr:e.target.checked}))}/> GSR (Gold/Silver)</label>
+            <label><input type="checkbox" checked={show.strategy} onChange={e=>setShow(s=>({...s,strategy:e.target.checked}))}/> Strategy</label>
+          </div>
+
+          {/* stat cards */}
+          <div style={{display:"grid", gridTemplateColumns:"repeat(3, minmax(0,1fr))", gap:12, margin:"10px 0 16px 0"}}>
+            <div style={{background:"#0f1525", border:"1px solid #1c2740", borderRadius:12, padding:"12px 14px"}}>
+              <div style={{opacity:.8, fontSize:12}}>Gold end value</div>
+              <div style={{fontSize:20, fontWeight:600, marginTop:2}}>${fmt(stats.gv,2)}</div>
+              <div style={{marginTop:6, fontSize:13}}>Change: <b>${fmt(stats.gchg,2)}</b> &nbsp;|&nbsp; <b>{fmt(stats.gpct,2)}%</b></div>
+            </div>
+            <div style={{background:"#0f1525", border:"1px solid #1c2740", borderRadius:12, padding:"12px 14px"}}>
+              <div style={{opacity:.8, fontSize:12}}>Silver end value</div>
+              <div style={{fontSize:20, fontWeight:600, marginTop:2}}>${fmt(stats.sv,2)}</div>
+              <div style={{marginTop:6, fontSize:13}}>Change: <b>${fmt(stats.schg,2)}</b> &nbsp;|&nbsp; <b>{fmt(stats.spct,2)}%</b></div>
+            </div>
+            <div style={{background:"#0f1525", border:"1px solid #1c2740", borderRadius:12, padding:"12px 14px"}}>
+              <div style={{opacity:.8, fontSize:12}}>Strategy end value</div>
+              <div style={{fontSize:20, fontWeight:600, marginTop:2}}>${fmt(stratStats.v,2)}</div>
+              <div style={{marginTop:6, fontSize:13}}>Change: <b>${fmt(stratStats.chg,2)}</b> &nbsp;|&nbsp; <b>{fmt(stratStats.pct,2)}%</b></div>
+            </div>
+          </div>
+
+          {/* NEW: switches & comparisons */}
+          <div style={{display:"grid", gridTemplateColumns:"repeat(3, minmax(0,1fr))", gap:12, margin:"0 0 16px 0"}}>
+            <div style={{background:"#0f1525", border:"1px solid #1c2740", borderRadius:12, padding:"12px 14px"}}>
+              <div style={{opacity:.8, fontSize:12}}>Number of switches</div>
+              <div style={{fontSize:24, fontWeight:700, marginTop:2}}>{compare.switches}</div>
+              <div style={{marginTop:6, fontSize:12, opacity:.8}}>Thresholds: G→S ≥ {thG2S} | S→G ≤ {thS2G}</div>
+            </div>
+            <div style={{background:"#0f1525", border:"1px solid #1c2740", borderRadius:12, padding:"12px 14px"}}>
+              <div style={{opacity:.8, fontSize:12}}>Strategy vs Gold</div>
+              <div style={{fontSize:18, fontWeight:600, marginTop:2}}>${fmt(compare.vsGold.diff,2)}</div>
+              <div style={{marginTop:6, fontSize:13}}><b>{fmt(compare.vsGold.pct,2)}%</b> vs Gold</div>
+            </div>
+            <div style={{background:"#0f1525", border:"1px solid #1c2740", borderRadius:12, padding:"12px 14px"}}>
+              <div style={{opacity:.8, fontSize:12}}>Strategy vs Silver</div>
+              <div style={{fontSize:18, fontWeight:600, marginTop:2}}>${fmt(compare.vsSilver.diff,2)}</div>
+              <div style={{marginTop:6, fontSize:13}}><b>{fmt(compare.vsSilver.pct,2)}%</b> vs Silver</div>
+            </div>
+          </div>
+
+          {err && <p style={{color:"#ff6b6b"}}>Error: {err}</p>}
+          {windowed.length>0 && (
+            <div style={{width:"100%", height:500}}>
+              <ResponsiveContainer>
+                <LineChart data={windowed.map((r, i) => ({...r, strategyValue: strategyRows[i]?.strategyValue }))} margin={{top:20,right:30,left:0,bottom:20}}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="date"
+                    tickFormatter={(d)=> d instanceof Date ? d.toLocaleDateString("en-GB",{ year:"2-digit", month:"short"}) : d}
+                    minTickGap={20}
+                  />
+                  {/* Equalized USD scale on both Y axes */}
+                  <YAxis yAxisId="left"  domain={equalUsdDomain} label={{ value:"USD",  angle:-90, position:"insideLeft" }}/>
+                  <YAxis yAxisId="right" orientation="right" domain={equalUsdDomain} label={{ value:"USD", angle:90,  position:"insideRight" }}/>
+                  {/* Separate axis for GSR */}
+                  <YAxis yAxisId="gsr" orientation="left" mirror width={40} domain={["auto","auto"]} label={{ value:"GSR", angle:-90, position:"insideLeft", offset:10 }}/>
+                  <Tooltip
+                    labelFormatter={(d)=> d instanceof Date ? d.toLocaleDateString("en-GB") : d}
+                    formatter={(v,n)=>{
+                      if (n==="gsr") return [fmt(v,3), "GSR (ratio)"];
+                      return [fmt(v,2), "USD value"];
+                    }}
+                  />
+                  <Legend/>
+                  {show.gold     && <Line yAxisId="right" type="monotone" dataKey="goldValue"     name="Gold"     stroke="#FFD700" dot={false} strokeWidth={2} connectNulls />}
+                  {show.silver   && <Line yAxisId="left"  type="monotone" dataKey="silverValue"   name="Silver"   stroke="#C0C0C0" dot={false} strokeWidth={2} connectNulls />}
+                  {show.gsr      && <Line yAxisId="gsr"   type="monotone" dataKey="gsr"           name="GSR"      stroke="#7dd3fc" dot={false} strokeWidth={2} connectNulls />}
+                  {show.strategy && <Line yAxisId="left"  type="monotone" dataKey="strategyValue" name="Strategy" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls />}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {windowed.length===0 && !err && <p>Adjust dates — no data in the selected range.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
