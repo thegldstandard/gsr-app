@@ -118,8 +118,13 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
 
 /* ---- CSV-first; API only to top-up the latest day (>=1990) ---- */
 async function fetchCSVText() {
-  const urls = ["/prices.csv", "/data/prices.csv"];
+  // Vite base path ("/" locally, "/gsr-app/" on GitHub Pages)
+  const base = import.meta.env.BASE_URL.replace(/\/+$/, "");
+
+  const urls = [`${base}/prices.csv`, `${base}/data/prices.csv`];
+
   let lastErr = null;
+
   for (const url of urls) {
     try {
       const res = await fetch(url, { cache: "no-store" });
@@ -127,18 +132,22 @@ async function fetchCSVText() {
         lastErr = new Error(`CSV HTTP ${res.status} for ${url}`);
         continue;
       }
-      const ct = (res.headers.get("content-type") || "").toLowerCase();
+
       const textRaw = await res.text();
-      if (ct.includes("text/html") || /^\s*<!doctype/i.test(textRaw)) {
-        lastErr = new Error(`Got HTML from ${url}`);
+
+      // Guard against HTML 404 pages
+      if (/^\s*<!doctype/i.test(textRaw) || /<html/i.test(textRaw)) {
+        lastErr = new Error(`HTML returned instead of CSV for ${url}`);
         continue;
       }
+
       return textRaw.replace(/^\uFEFF/, "");
     } catch (e) {
       lastErr = e;
     }
   }
-  throw lastErr || new Error("prices.csv not found at / or /data/");
+
+  throw lastErr || new Error("prices.csv not found");
 }
 
 async function fetchLatestFromAPI() {
