@@ -118,26 +118,15 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
 
 /* ---- CSV-first; API only to top-up the latest day (>=1990) ---- */
 async function fetchCSVText() {
-  // Vite will set BASE_URL correctly if your vite.config.js has base: '/gsr-app/'
-  // In dev it will be '/'
+  // ✅ Always try relative first (works on GitHub Pages subpaths like /gsr-app/)
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
 
-  // Extra safety fallback (if base wasn't configured)
-  const repoBaseGuess =
-    typeof window !== "undefined" &&
-    window.location &&
-    window.location.pathname.includes("/gsr-app/")
-      ? "/gsr-app/"
-      : "/";
-
-  const bases = Array.from(new Set([base, repoBaseGuess, "/"]));
-
-  // Try likely locations in order (all relative to base)
-  const candidates = [];
-  for (const b of bases) {
-    candidates.push(`${b}prices.csv`);
-    candidates.push(`${b}data/prices.csv`);
-  }
+  const candidates = [
+    "prices.csv",
+    "data/prices.csv",
+    `${base}prices.csv`,
+    `${base}data/prices.csv`,
+  ];
 
   let lastErr = null;
 
@@ -152,7 +141,7 @@ async function fetchCSVText() {
       const ct = (res.headers.get("content-type") || "").toLowerCase();
       const textRaw = await res.text();
 
-      // Guard against GitHub Pages returning HTML instead of the CSV
+      // Guard against GitHub returning an HTML page instead of the CSV
       if (ct.includes("text/html") || /^\s*<!doctype/i.test(textRaw)) {
         lastErr = new Error(`Got HTML instead of CSV from ${url}`);
         continue;
@@ -1279,8 +1268,7 @@ export default function App() {
                 )}
 
                 {/* ✅ CRITICAL FIX #1:
-                    In USD_BOTH mode, force left axis to update by binding an invisible USD series to it.
-                    This mirrors the right axis *and* updates correctly when toggling gold/silver. */}
+                    In USD_BOTH mode, force left axis to update by binding an invisible USD series to it. */}
                 {axisMode === "USD_BOTH" && (
                   <Line
                     name="__axis_helper__usd_left__"
