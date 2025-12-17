@@ -1,21 +1,25 @@
 {
-    "name":  "gsr-app",
-    "private":  true,
-    "version":  "0.0.0",
-    "type":  "module",
-    "scripts":  {
-                    "dev":  "vite --open",
-                    "build":  "vite build",
-                    "preview":  "vite preview"
-                },
-    "dependencies":  {
-                         "react":  "18.3.1",
-                         "react-dom":  "18.3.1",
-                         "recharts":  "2.12.7",
-                         "papaparse":  "5.4.1"
-                     },
-    "devDependencies":  {
-                            "@vitejs/plugin-react":  "4.3.3",
-                            "vite":  "5.4.10"
-                        }
+  "name": "gsr-app",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --open",
+    "build": "vite build",
+    "preview": "vite preview",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist"
+  },
+  "dependencies": {
+    "dom-helpers": "^6.0.1",
+    "papaparse": "5.4.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "recharts": "2.12.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.3",
+    "gh-pages": "^6.3.0",
+    "vite": "5.4.10"
+  }
 }

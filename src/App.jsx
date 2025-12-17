@@ -118,9 +118,8 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
 
 /* ---- CSV-first; API only to top-up the latest day (>=1990) ---- */
 async function fetchCSVText() {
-  // Vite base path ("/" locally, "/gsr-app/" on GitHub Pages)
-  const base = import.meta.env.BASE_URL.replace(/\/+$/, "");
-
+  // ✅ GitHub Pages-safe: uses Vite base (e.g. /gsr-app/) instead of absolute /
+  const base = (import.meta?.env?.BASE_URL || "/").replace(/\/+$/, "");
   const urls = [`${base}/prices.csv`, `${base}/data/prices.csv`];
 
   let lastErr = null;
@@ -146,7 +145,6 @@ async function fetchCSVText() {
       lastErr = e;
     }
   }
-
   throw lastErr || new Error("prices.csv not found");
 }
 
