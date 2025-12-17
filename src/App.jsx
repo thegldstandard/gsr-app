@@ -118,13 +118,30 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
 
 /* ---- CSV-first; API only to top-up the latest day (>=1990) ---- */
 async function fetchCSVText() {
-  // ✅ GitHub Pages-safe: uses Vite base (e.g. /gsr-app/) instead of absolute /
-  const base = (import.meta?.env?.BASE_URL || "/").replace(/\/+$/, "");
-  const urls = [`${base}/prices.csv`, `${base}/data/prices.csv`];
+  // Vite will set BASE_URL correctly if your vite.config.js has base: '/gsr-app/'
+  // In dev it will be '/'
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
+
+  // Extra safety fallback (if base wasn't configured)
+  const repoBaseGuess =
+    typeof window !== "undefined" &&
+    window.location &&
+    window.location.pathname.includes("/gsr-app/")
+      ? "/gsr-app/"
+      : "/";
+
+  const bases = Array.from(new Set([base, repoBaseGuess, "/"]));
+
+  // Try likely locations in order (all relative to base)
+  const candidates = [];
+  for (const b of bases) {
+    candidates.push(`${b}prices.csv`);
+    candidates.push(`${b}data/prices.csv`);
+  }
 
   let lastErr = null;
 
-  for (const url of urls) {
+  for (const url of candidates) {
     try {
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) {
@@ -132,11 +149,12 @@ async function fetchCSVText() {
         continue;
       }
 
+      const ct = (res.headers.get("content-type") || "").toLowerCase();
       const textRaw = await res.text();
 
-      // Guard against HTML 404 pages
-      if (/^\s*<!doctype/i.test(textRaw) || /<html/i.test(textRaw)) {
-        lastErr = new Error(`HTML returned instead of CSV for ${url}`);
+      // Guard against GitHub Pages returning HTML instead of the CSV
+      if (ct.includes("text/html") || /^\s*<!doctype/i.test(textRaw)) {
+        lastErr = new Error(`Got HTML instead of CSV from ${url}`);
         continue;
       }
 
@@ -145,6 +163,7 @@ async function fetchCSVText() {
       lastErr = e;
     }
   }
+
   throw lastErr || new Error("prices.csv not found");
 }
 
