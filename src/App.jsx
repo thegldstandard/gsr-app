@@ -94,7 +94,6 @@ function niceTicks(min, max, target = 7) {
   return { domain: [niceMin, niceMax], ticks };
 }
 
-// ✅ adds guaranteed headroom (and optional floor)
 function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
   if (!Number.isFinite(min) || !Number.isFinite(max))
     return { domain: ["auto", "auto"], ticks: undefined };
@@ -108,17 +107,16 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
   const range = max - min;
   const pad = range * padFrac;
 
-  let paddedMin = min - pad * 0.25; // small bottom padding
-  let paddedMax = max + pad; // bigger headroom on top
+  let paddedMin = min - pad * 0.25;
+  let paddedMax = max + pad;
 
   if (clampMinToZero) paddedMin = Math.max(0, paddedMin);
 
   return niceTicks(paddedMin, paddedMax, target);
 }
 
-/* ---- CSV-first; API only to top-up the latest day (>=1990) ---- */
+/* ---- CSV-first; API only to top-up the latest day ---- */
 async function fetchCSVText() {
-  // ✅ Always try relative first (works on GitHub Pages subpaths like /gsr-app/)
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
 
   const candidates = [
@@ -141,7 +139,6 @@ async function fetchCSVText() {
       const ct = (res.headers.get("content-type") || "").toLowerCase();
       const textRaw = await res.text();
 
-      // Guard against GitHub returning an HTML page instead of the CSV
       if (ct.includes("text/html") || /^\s*<!doctype/i.test(textRaw)) {
         lastErr = new Error(`Got HTML instead of CSV from ${url}`);
         continue;
@@ -187,10 +184,13 @@ async function fetchLatestFromAPI() {
 function useBreakpoint() {
   const get = () => {
     const w = typeof window !== "undefined" ? window.innerWidth : 1200;
+    const h = typeof window !== "undefined" ? window.innerHeight : 800;
     return {
       w,
+      h,
       isMobile: w <= 640,
       isTablet: w > 640 && w <= 1024,
+      isLandscape: w > h,
     };
   };
   const [bp, setBp] = useState(get);
@@ -268,7 +268,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
   );
 }
 
-/* ----------------- Currency input (commas, no decimals) ----------------- */
+/* ----------------- Currency input ----------------- */
 function CurrencyInput({ value, onChange, className = "" }) {
   const [txt, setTxt] = useState((value ?? 0).toLocaleString("en-GB"));
 
@@ -358,7 +358,7 @@ function CustomTooltip({ active, label, payload, isMobile }) {
   );
 }
 
-/* -------- duration between 2 dates (years + months) -------- */
+/* -------- duration between 2 dates -------- */
 function diffYearsMonths(startDate, endDate) {
   if (!startDate || !endDate) return { years: 0, months: 0 };
   let months =
@@ -371,7 +371,7 @@ function diffYearsMonths(startDate, endDate) {
 
 /* ----------------- component ----------------- */
 export default function App() {
-  const { isMobile, isTablet, w } = useBreakpoint();
+  const { isMobile, isTablet, w, h, isLandscape } = useBreakpoint();
 
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState("");
@@ -395,7 +395,6 @@ export default function App() {
   const LEFT_LABEL_DY = 0;
   const RIGHT_LABEL_DY = 0;
 
-  // more breathing room on desktop; tighter on mobile
   const CHART_MARGIN = useMemo(
     () => ({
       top: isMobile ? 12 : 20,
@@ -406,14 +405,19 @@ export default function App() {
     [isMobile]
   );
 
-  // Responsive height:
-  // - mobile: based on viewport height but capped to stay usable
-  // - desktop: your original 660
+  // ✅ landscape fill: phone landscape makes chart dominate the viewport height
   const CHART_HEIGHT = useMemo(() => {
-    if (isMobile) return Math.max(320, Math.min(520, Math.round(window.innerHeight * 0.52)));
+    if (typeof window === "undefined") return 660;
+
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const landscape = vw > vh;
+
+    if (isMobile && landscape) return Math.max(260, Math.min(560, Math.round(vh * 0.78)));
+    if (isMobile) return Math.max(320, Math.min(520, Math.round(vh * 0.52)));
     if (isTablet) return 520;
     return 660;
-  }, [isMobile, isTablet, w]);
+  }, [isMobile, isTablet, w, h]);
   /* ================================================================= */
 
   useEffect(() => {
@@ -693,7 +697,6 @@ export default function App() {
     };
   }, [data, amount, withStrategy.endsIn]);
 
-  // ✅ USD ticks/domains with headroom
   const { usdDomain, usdTicks } = useMemo(() => {
     if (!data.length) return { usdDomain: ["auto", "auto"], usdTicks: undefined };
 
@@ -742,7 +745,6 @@ export default function App() {
     return { ratioDomain: out.domain, ratioTicks: out.ticks };
   }, [data, isMobile]);
 
-  // ✅ Axis mode rules
   const anyUsdOn = show.gold || show.silver || show.strat;
   const gsrOn = show.gsr;
 
@@ -769,7 +771,6 @@ export default function App() {
   const leftLabel = hideAxisText ? "" : leftIsRatio ? "Ratio" : "Value (USD)";
   const rightLabel = hideAxisText ? "" : rightIsRatio ? "Ratio" : "Value (USD)";
 
-  // USD series binding
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
   const gsrAxisId = "leftAxis";
 
@@ -792,7 +793,6 @@ export default function App() {
     });
   }, [axisMode, show, leftDomain, leftTicks, rightDomain, rightTicks, usdAxisId]);
 
-  // X-axis tick formatting: shorter on mobile
   const xTickFormatter = (d) => {
     const dt = d instanceof Date ? d : new Date(d);
     if (!dt || isNaN(+dt)) return "";
@@ -851,14 +851,12 @@ export default function App() {
           .gsr-title{ font-size: 36px; }
           .gsr-title-underline{ width: 200px; }
           .gsr-controls{ grid-template-columns: 1fr; gap: 10px; }
-          :root{ --ctrlH: 42px; } /* bigger tap targets */
+          :root{ --ctrlH: 42px; }
         }
 
         .gsr-control{display:flex; flex-direction:column; gap:6px; min-width:0;}
         .gsr-label{ font-size: 13px; color: rgba(255,255,255,0.75); font-weight: 800; text-align:center; }
-        @media (max-width: 640px){
-          .gsr-label{ font-size: 12px; }
-        }
+        @media (max-width: 640px){ .gsr-label{ font-size: 12px; } }
 
         .gsr-pill{
           height: var(--ctrlH);
@@ -873,7 +871,7 @@ export default function App() {
           min-width: 0;
           text-align: center;
           line-height: var(--ctrlH);
-          font-size: 16px; /* avoids iOS zoom-on-focus */
+          font-size: 16px; /* iOS zoom prevention */
         }
         .gsr-pillReadOnly{
           height: var(--ctrlH);
@@ -893,9 +891,7 @@ export default function App() {
           font-size: 16px;
         }
         .gsr-pill--small{ padding: 0 10px; font-size: 14px; font-weight: 1000; }
-        @media (max-width: 640px){
-          .gsr-pill--small{ font-size: 16px; } /* keep >=16px on iOS */
-        }
+        @media (max-width: 640px){ .gsr-pill--small{ font-size: 16px; } }
         .gsr-pillSelect{ text-align: center; text-align-last: center; }
         .gsr-pillSelect option{ text-align:left; }
 
@@ -1002,6 +998,37 @@ export default function App() {
           .gsr-card--portfolio .gsr-cardInner{ font-size: 16px; }
         }
 
+        /* ✅ PHONE LANDSCAPE: fill width + reduce wasted vertical space */
+        @media (max-width: 900px) and (orientation: landscape){
+          .gsr-page{ padding: 10px 10px 14px; }
+          .gsr-title{ font-size: 30px; }
+          .gsr-title-underline{ width: 180px; }
+
+          .gsr-controls{
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+          }
+
+          .gsr-cards{
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+          }
+
+          .gsr-leftStack{
+            grid-template-rows: none;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+          }
+
+          .gsr-cardTitle{ font-size: 30px; }
+          .gsr-cardValue{ font-size: 22px; }
+          .gsr-card--portfolio .gsr-cardTitle{ font-size: 34px; }
+          .gsr-card--portfolio .gsr-cardValue{ font-size: 26px; }
+          .gsr-card--portfolio .gsr-cardInner{ font-size: 15px; }
+
+          .gsr-chartWrap{ padding: 8px 8px 10px; }
+        }
+
         .gsr-error{color:#ffb4b4; font-weight:900;}
 
         .gsr-chartWrap{
@@ -1018,10 +1045,7 @@ export default function App() {
           flex-wrap: wrap;
         }
         @media (max-width: 640px){
-          .gsr-chartTop{
-            justify-content:flex-start;
-            gap: 10px;
-          }
+          .gsr-chartTop{ justify-content:flex-start; gap: 10px; }
         }
         .gsr-toggle{
           display:flex; align-items:center; gap:6px;
@@ -1031,25 +1055,16 @@ export default function App() {
           white-space:nowrap;
           font-size: 14px;
         }
-        .gsr-toggle input{
-          width: 18px;
-          height: 18px;
-        }
-        @media (max-width: 640px){
-          .gsr-toggle{
-            font-size: 13px;
-          }
-        }
-        .gsr-dot{
-          width: 11px; height: 11px; border-radius: 999px; display:inline-block;
-        }
+        .gsr-toggle input{ width: 18px; height: 18px; }
+        @media (max-width: 640px){ .gsr-toggle{ font-size: 13px; } }
+        .gsr-dot{ width: 11px; height: 11px; border-radius: 999px; display:inline-block; }
         .gsr-chartInner{
           width: 100%;
           height: var(--chartH);
           display:flex;
           align-items:center;
           justify-content:center;
-          touch-action: pan-y; /* lets you scroll the page naturally on mobile */
+          touch-action: pan-y;
         }
       `}</style>
 
@@ -1250,7 +1265,11 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }}
+                  tick={
+                    hideAxisText
+                      ? false
+                      : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }
+                  }
                   tickMargin={10}
                   width={AXIS_WIDTH}
                   domain={leftDomain}
@@ -1281,7 +1300,11 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }}
+                  tick={
+                    hideAxisText
+                      ? false
+                      : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }
+                  }
                   tickMargin={10}
                   width={AXIS_WIDTH}
                   domain={rightDomain}
@@ -1309,7 +1332,6 @@ export default function App() {
                   isAnimationActive={false}
                 />
 
-                {/* USD series */}
                 {show.gold && (
                   <Line
                     name="Gold"
@@ -1353,7 +1375,6 @@ export default function App() {
                   />
                 )}
 
-                {/* GSR series */}
                 {show.gsr && (
                   <Line
                     name="GSR"
@@ -1369,15 +1390,27 @@ export default function App() {
                   />
                 )}
 
-                {/* switching reference lines */}
-                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
-                  <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />
-                )}
-                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(s2g) && (
-                  <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />
-                )}
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") &&
+                  show.gsr &&
+                  Number.isFinite(g2s) && (
+                    <ReferenceLine
+                      yAxisId="leftAxis"
+                      y={g2s}
+                      stroke="#94a3b8"
+                      strokeDasharray="4 4"
+                    />
+                  )}
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") &&
+                  show.gsr &&
+                  Number.isFinite(s2g) && (
+                    <ReferenceLine
+                      yAxisId="leftAxis"
+                      y={s2g}
+                      stroke="#94a3b8"
+                      strokeDasharray="4 4"
+                    />
+                  )}
 
-                {/* axis helpers */}
                 {axisMode === "USD_BOTH" && (
                   <Line
                     name="__axis_helper__usd_left__"
@@ -1394,6 +1427,7 @@ export default function App() {
                     isAnimationActive={false}
                   />
                 )}
+
                 {axisMode === "RATIO_BOTH" && show.gsr && (
                   <Line
                     name="__axis_helper__ratio_right__"
