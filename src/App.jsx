@@ -183,6 +183,27 @@ async function fetchLatestFromAPI() {
   }
 }
 
+/* ----------------- responsive hook ----------------- */
+function useBreakpoint() {
+  const get = () => {
+    const w = typeof window !== "undefined" ? window.innerWidth : 1200;
+    return {
+      w,
+      isMobile: w <= 640,
+      isTablet: w > 640 && w <= 1024,
+    };
+  };
+  const [bp, setBp] = useState(get);
+
+  useEffect(() => {
+    const onResize = () => setBp(get());
+    window.addEventListener("resize", onResize, { passive: true });
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  return bp;
+}
+
 /* ----------------- DD/MM/YYYY pill input ----------------- */
 function DatePills({ label, valueIso, onChangeIso, compact = false }) {
   const d = useMemo(() => fromIsoLocal(valueIso) || new Date(2000, 0, 1), [valueIso]);
@@ -273,7 +294,7 @@ function CurrencyInput({ value, onChange, className = "" }) {
 }
 
 /* ----------------- tooltip ----------------- */
-function CustomTooltip({ active, label, payload }) {
+function CustomTooltip({ active, label, payload, isMobile }) {
   if (!active || !payload?.length) return null;
 
   const dt =
@@ -304,16 +325,19 @@ function CustomTooltip({ active, label, payload }) {
       style={{
         background: "rgba(255,255,255,0.96)",
         borderRadius: 12,
-        padding: "10px 12px",
+        padding: isMobile ? "8px 10px" : "10px 12px",
         color: "#0b1b2a",
         boxShadow: "0 10px 25px rgba(0,0,0,0.22)",
-        minWidth: 220,
+        minWidth: isMobile ? 180 : 220,
+        maxWidth: isMobile ? 240 : 320,
       }}
     >
-      <div style={{ fontWeight: 1000, marginBottom: 8 }}>{labelText}</div>
-      <div style={{ display: "grid", gap: 6 }}>
+      <div style={{ fontWeight: 1000, marginBottom: 8, fontSize: isMobile ? 12 : 14 }}>
+        {labelText}
+      </div>
+      <div style={{ display: "grid", gap: 6, fontSize: isMobile ? 12 : 14 }}>
         {rows.map((r) => (
-          <div key={r.name} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+          <div key={r.name} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
               <span
                 style={{
@@ -347,6 +371,8 @@ function diffYearsMonths(startDate, endDate) {
 
 /* ----------------- component ----------------- */
 export default function App() {
+  const { isMobile, isTablet, w } = useBreakpoint();
+
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState("");
 
@@ -360,18 +386,35 @@ export default function App() {
   const [s2g, setS2G] = useState(65);
   const [startMetal, setStartMetal] = useState("silver");
 
-  /* ================= MANUAL AXIS SETTINGS (EDIT THESE) ================= */
+  /* ================= RESPONSIVE AXIS/CHART SETTINGS ================= */
   const AXIS_COLOR = "#0b1b2a";
-  const AXIS_WIDTH = 120;
+  const AXIS_WIDTH = isMobile ? 64 : isTablet ? 88 : 120;
+
   const LEFT_LABEL_OFFSET = 0;
   const RIGHT_LABEL_OFFSET = 0;
   const LEFT_LABEL_DY = 0;
   const RIGHT_LABEL_DY = 0;
 
-  // ✅ more top margin so strokes never look clipped
-  const CHART_MARGIN = { top: 20, right: 15, left: 15, bottom: 22 };
-  const CHART_HEIGHT = 660;
-  /* ==================================================================== */
+  // more breathing room on desktop; tighter on mobile
+  const CHART_MARGIN = useMemo(
+    () => ({
+      top: isMobile ? 12 : 20,
+      right: isMobile ? 8 : 15,
+      left: isMobile ? 8 : 15,
+      bottom: isMobile ? 14 : 22,
+    }),
+    [isMobile]
+  );
+
+  // Responsive height:
+  // - mobile: based on viewport height but capped to stay usable
+  // - desktop: your original 660
+  const CHART_HEIGHT = useMemo(() => {
+    if (isMobile) return Math.max(320, Math.min(520, Math.round(window.innerHeight * 0.52)));
+    if (isTablet) return 520;
+    return 660;
+  }, [isMobile, isTablet, w]);
+  /* ================================================================= */
 
   useEffect(() => {
     (async () => {
@@ -675,9 +718,9 @@ export default function App() {
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { usdDomain: ["auto", "auto"], usdTicks: undefined };
 
-    const out = niceTicksWithPadding(min, max, 7, 0.06, true);
+    const out = niceTicksWithPadding(min, max, isMobile ? 5 : 7, 0.06, true);
     return { usdDomain: out.domain, usdTicks: out.ticks };
-  }, [data, show]);
+  }, [data, show, isMobile]);
 
   const { ratioDomain, ratioTicks } = useMemo(() => {
     if (!data.length) return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
@@ -695,11 +738,11 @@ export default function App() {
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
 
-    const out = niceTicksWithPadding(min, max, 7, 0.06, false);
+    const out = niceTicksWithPadding(min, max, isMobile ? 5 : 7, 0.06, false);
     return { ratioDomain: out.domain, ratioTicks: out.ticks };
-  }, [data]);
+  }, [data, isMobile]);
 
-  // ✅ Axis mode rules (same as you want)
+  // ✅ Axis mode rules
   const anyUsdOn = show.gold || show.silver || show.strat;
   const gsrOn = show.gsr;
 
@@ -726,14 +769,10 @@ export default function App() {
   const leftLabel = hideAxisText ? "" : leftIsRatio ? "Ratio" : "Value (USD)";
   const rightLabel = hideAxisText ? "" : rightIsRatio ? "Ratio" : "Value (USD)";
 
-  // ✅ bind USD series:
-  // - USD_BOTH => draw USD on RIGHT (visible), mirror LEFT with invisible USD helper
-  // - MIXED => draw USD on RIGHT, GSR on LEFT
-  // - RATIO_BOTH => draw GSR on LEFT, mirror RIGHT with invisible GSR helper
+  // USD series binding
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
   const gsrAxisId = "leftAxis";
 
-  // Helper dataKey that always matches the *currently-visible* USD series
   const usdHelperKey = useMemo(() => {
     if (show.strat) return "strat";
     if (show.gold) return "goldValue";
@@ -741,7 +780,6 @@ export default function App() {
     return "goldValue";
   }, [show.strat, show.gold, show.silver]);
 
-  // ✅ HARD remount key: include show flags + exact domains/ticks (no rounding)
   const axisKeyPart = useMemo(() => {
     return JSON.stringify({
       axisMode,
@@ -754,8 +792,18 @@ export default function App() {
     });
   }, [axisMode, show, leftDomain, leftTicks, rightDomain, rightTicks, usdAxisId]);
 
+  // X-axis tick formatting: shorter on mobile
+  const xTickFormatter = (d) => {
+    const dt = d instanceof Date ? d : new Date(d);
+    if (!dt || isNaN(+dt)) return "";
+    if (isMobile) return dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
+    return dt.toLocaleDateString("en-GB", { year: "2-digit", month: "short" });
+  };
+
+  const axisTickFontSize = isMobile ? 11 : 13;
+
   return (
-    <div className="gsr-page">
+    <div className="gsr-page" style={{ ["--chartH"]: `${CHART_HEIGHT}px` }}>
       <style>{`
         :root{
           --bg:#123a5a;
@@ -798,9 +846,19 @@ export default function App() {
         @media (max-width: 1200px){
           .gsr-controls{ grid-template-columns: 1fr 1fr; gap: 12px; }
         }
+        @media (max-width: 640px){
+          .gsr-page{ padding: 16px 12px 24px; }
+          .gsr-title{ font-size: 36px; }
+          .gsr-title-underline{ width: 200px; }
+          .gsr-controls{ grid-template-columns: 1fr; gap: 10px; }
+          :root{ --ctrlH: 42px; } /* bigger tap targets */
+        }
 
         .gsr-control{display:flex; flex-direction:column; gap:6px; min-width:0;}
         .gsr-label{ font-size: 13px; color: rgba(255,255,255,0.75); font-weight: 800; text-align:center; }
+        @media (max-width: 640px){
+          .gsr-label{ font-size: 12px; }
+        }
 
         .gsr-pill{
           height: var(--ctrlH);
@@ -815,6 +873,7 @@ export default function App() {
           min-width: 0;
           text-align: center;
           line-height: var(--ctrlH);
+          font-size: 16px; /* avoids iOS zoom-on-focus */
         }
         .gsr-pillReadOnly{
           height: var(--ctrlH);
@@ -831,8 +890,12 @@ export default function App() {
           display:flex;
           align-items:center;
           justify-content:center;
+          font-size: 16px;
         }
         .gsr-pill--small{ padding: 0 10px; font-size: 14px; font-weight: 1000; }
+        @media (max-width: 640px){
+          .gsr-pill--small{ font-size: 16px; } /* keep >=16px on iOS */
+        }
         .gsr-pillSelect{ text-align: center; text-align-last: center; }
         .gsr-pillSelect option{ text-align:left; }
 
@@ -849,14 +912,15 @@ export default function App() {
           min-width: 0;
         }
         .gsr-dateSeg{
-          width: 40px;
+          width: 44px;
           height: calc(var(--ctrlH) - 8px);
           border: 0; outline: none;
           text-align:center; font-weight: 1000;
           color: #0b1b2a; background: transparent;
           min-width: 0;
+          font-size: 16px; /* iOS zoom prevention */
         }
-        .gsr-dateYear{width: 70px;}
+        .gsr-dateYear{width: 74px;}
         .gsr-dateSlash{color:#64748b; font-weight:1000;}
         .gsr-datePills--compact{ gap:6px; padding: 0 8px; }
         .is-compact .gsr-label{ font-size: 12px; }
@@ -930,6 +994,14 @@ export default function App() {
         }
         .gsr-portfolioGrid .right{ text-align:right; }
 
+        @media (max-width: 640px){
+          .gsr-cardTitle{ font-size: 34px; }
+          .gsr-cardValue{ font-size: 24px; }
+          .gsr-card--portfolio .gsr-cardTitle{ font-size: 40px; }
+          .gsr-card--portfolio .gsr-cardValue{ font-size: 30px; }
+          .gsr-card--portfolio .gsr-cardInner{ font-size: 16px; }
+        }
+
         .gsr-error{color:#ffb4b4; font-weight:900;}
 
         .gsr-chartWrap{
@@ -945,6 +1017,12 @@ export default function App() {
           padding: 6px 6px 8px;
           flex-wrap: wrap;
         }
+        @media (max-width: 640px){
+          .gsr-chartTop{
+            justify-content:flex-start;
+            gap: 10px;
+          }
+        }
         .gsr-toggle{
           display:flex; align-items:center; gap:6px;
           color: #0b1b2a;
@@ -953,15 +1031,25 @@ export default function App() {
           white-space:nowrap;
           font-size: 14px;
         }
+        .gsr-toggle input{
+          width: 18px;
+          height: 18px;
+        }
+        @media (max-width: 640px){
+          .gsr-toggle{
+            font-size: 13px;
+          }
+        }
         .gsr-dot{
           width: 11px; height: 11px; border-radius: 999px; display:inline-block;
         }
         .gsr-chartInner{
           width: 100%;
-          height: ${CHART_HEIGHT}px;
+          height: var(--chartH);
           display:flex;
           align-items:center;
           justify-content:center;
+          touch-action: pan-y; /* lets you scroll the page naturally on mobile */
         }
       `}</style>
 
@@ -1101,22 +1189,38 @@ export default function App() {
         <div className="gsr-chartWrap">
           <div className="gsr-chartTop">
             <label className="gsr-toggle">
-              <input type="checkbox" checked={show.gold} onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))} />
+              <input
+                type="checkbox"
+                checked={show.gold}
+                onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))}
+              />
               <span className="gsr-dot" style={{ background: "#f2c36b" }} />
               Gold
             </label>
             <label className="gsr-toggle">
-              <input type="checkbox" checked={show.silver} onChange={(e) => setShow((s) => ({ ...s, silver: e.target.checked }))} />
+              <input
+                type="checkbox"
+                checked={show.silver}
+                onChange={(e) => setShow((s) => ({ ...s, silver: e.target.checked }))}
+              />
               <span className="gsr-dot" style={{ background: "#0e2d4a" }} />
               Silver
             </label>
             <label className="gsr-toggle">
-              <input type="checkbox" checked={show.strat} onChange={(e) => setShow((s) => ({ ...s, strat: e.target.checked }))} />
+              <input
+                type="checkbox"
+                checked={show.strat}
+                onChange={(e) => setShow((s) => ({ ...s, strat: e.target.checked }))}
+              />
               <span className="gsr-dot" style={{ background: "#a77d52" }} />
               My Portfolio
             </label>
             <label className="gsr-toggle">
-              <input type="checkbox" checked={show.gsr} onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))} />
+              <input
+                type="checkbox"
+                checked={show.gsr}
+                onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))}
+              />
               <span className="gsr-dot" style={{ background: "#000000" }} />
               GSR
             </label>
@@ -1129,12 +1233,12 @@ export default function App() {
 
                 <XAxis
                   dataKey="date"
-                  tickFormatter={(d) =>
-                    d instanceof Date ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" }) : d
-                  }
-                  minTickGap={18}
+                  tickFormatter={xTickFormatter}
+                  minTickGap={isMobile ? 26 : 18}
                   tickMargin={10}
                   padding={{ left: 6, right: 6 }}
+                  tick={{ fontSize: axisTickFontSize, fontWeight: 900, fill: "#0b1b2a" }}
+                  stroke="#0b1b2a"
                 />
 
                 <YAxis
@@ -1146,8 +1250,8 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900 }}
-                  tickMargin={12}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }}
+                  tickMargin={10}
                   width={AXIS_WIDTH}
                   domain={leftDomain}
                   ticks={leftTicks}
@@ -1163,6 +1267,7 @@ export default function App() {
                           dy: LEFT_LABEL_DY,
                           fill: AXIS_COLOR,
                           fontWeight: 900,
+                          fontSize: isMobile ? 11 : 13,
                         }
                   }
                 />
@@ -1176,8 +1281,8 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900 }}
-                  tickMargin={12}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }}
+                  tickMargin={10}
                   width={AXIS_WIDTH}
                   domain={rightDomain}
                   ticks={rightTicks}
@@ -1193,11 +1298,16 @@ export default function App() {
                           dy: RIGHT_LABEL_DY,
                           fill: AXIS_COLOR,
                           fontWeight: 900,
+                          fontSize: isMobile ? 11 : 13,
                         }
                   }
                 />
 
-                <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
+                <Tooltip
+                  content={<CustomTooltip isMobile={isMobile} />}
+                  cursor={{ strokeOpacity: 0.25 }}
+                  isAnimationActive={false}
+                />
 
                 {/* USD series */}
                 {show.gold && (
@@ -1209,7 +1319,7 @@ export default function App() {
                     stroke="#f2c36b"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: 4 }}
+                    activeDot={{ r: isMobile ? 5 : 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
@@ -1223,7 +1333,7 @@ export default function App() {
                     stroke="#0e2d4a"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: 4 }}
+                    activeDot={{ r: isMobile ? 5 : 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
@@ -1237,13 +1347,13 @@ export default function App() {
                     stroke="#a77d52"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: 4 }}
+                    activeDot={{ r: isMobile ? 5 : 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
                 )}
 
-                {/* GSR series (always show when ticked) */}
+                {/* GSR series */}
                 {show.gsr && (
                   <Line
                     name="GSR"
@@ -1253,13 +1363,13 @@ export default function App() {
                     stroke="#000000"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: 4 }}
+                    activeDot={{ r: isMobile ? 5 : 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
                 )}
 
-                {/* switching reference lines (only meaningful when GSR on left axis) */}
+                {/* switching reference lines */}
                 {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
                   <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />
                 )}
@@ -1267,8 +1377,7 @@ export default function App() {
                   <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />
                 )}
 
-                {/* ✅ CRITICAL FIX #1:
-                    In USD_BOTH mode, force left axis to update by binding an invisible USD series to it. */}
+                {/* axis helpers */}
                 {axisMode === "USD_BOTH" && (
                   <Line
                     name="__axis_helper__usd_left__"
@@ -1285,8 +1394,6 @@ export default function App() {
                     isAnimationActive={false}
                   />
                 )}
-
-                {/* In RATIO_BOTH mode, force right axis to update by binding invisible GSR to it */}
                 {axisMode === "RATIO_BOTH" && show.gsr && (
                   <Line
                     name="__axis_helper__ratio_right__"
