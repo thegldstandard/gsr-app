@@ -268,40 +268,41 @@ function useBreakpoint() {
   return bp;
 }
 
-/* ----------------- info tooltip (NO FLICKER) ----------------- */
-function InfoTip({ text }) {
-  const [open, setOpen] = useState(false);
+/* ----------------- globally exclusive tooltip ----------------- */
+function InfoTip({ id, activeId, setActiveId, text }) {
+  const open = activeId === id;
   const isTouchRef = React.useRef(false);
 
+  // close on ESC (nice on desktop)
   useEffect(() => {
-    const onDoc = (e) => {
-      if (!e.target.closest?.(".gsr-tipWrap")) setOpen(false);
+    const onKey = (e) => {
+      if (e.key === "Escape") setActiveId(null);
     };
-    document.addEventListener("pointerdown", onDoc);
-    return () => document.removeEventListener("pointerdown", onDoc);
-  }, []);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [setActiveId]);
 
   return (
     <span
       className="gsr-tipWrap"
       onMouseEnter={() => {
-        if (!isTouchRef.current) setOpen(true);
+        if (!isTouchRef.current) setActiveId(id);
       }}
       onMouseLeave={() => {
-        if (!isTouchRef.current) setOpen(false);
+        if (!isTouchRef.current) setActiveId(null);
       }}
     >
       <button
         type="button"
         className="gsr-tipBtn"
         aria-label="Info"
+        aria-expanded={open}
         onPointerDown={() => {
-          // if user touches, treat as tap-only and avoid hover toggling
           isTouchRef.current = true;
         }}
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((s) => !s);
+          setActiveId((cur) => (cur === id ? null : id));
         }}
       >
         i
@@ -481,6 +482,16 @@ function diffYearsMonths(startDate, endDate) {
 /* ----------------- component ----------------- */
 export default function App() {
   const { isMobile, isTablet, w, h } = useBreakpoint();
+
+  // ✅ only one tooltip open globally
+  const [activeTipId, setActiveTipId] = useState(null);
+
+  useEffect(() => {
+    const close = () => setActiveTipId(null);
+    // click/tap anywhere closes the currently open tooltip
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
 
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState("");
@@ -1133,7 +1144,7 @@ export default function App() {
           justify-content:center;
         }
 
-        /* ✅ tooltips (stable; no hover flicker) */
+        /* ✅ tooltips (exclusive open) */
         .gsr-tipWrap{
           position: relative;
           display:inline-flex;
@@ -1174,7 +1185,7 @@ export default function App() {
           font-size: 13px;
           font-weight: 900;
           line-height: 1.25;
-          pointer-events: none; /* ✅ prevents hover flicker */
+          pointer-events: none;
         }
         .gsr-tipBubble::after{
           content:"";
@@ -1194,7 +1205,7 @@ export default function App() {
         </header>
 
         {/* controls */}
-        <section className="gsr-controls">
+        <section className="gsr-controls" onPointerDown={(e) => e.stopPropagation()}>
           <div className="gsr-control">
             <span className="gsr-label">Initial Amount (USD)</span>
             <CurrencyInput value={amount} onChange={setAmount} />
@@ -1245,7 +1256,7 @@ export default function App() {
         </section>
 
         {/* cards */}
-        <section className="gsr-cards">
+        <section className="gsr-cards" onPointerDown={(e) => e.stopPropagation()}>
           <div className="gsr-leftStack">
             <div className="gsr-card">
               <div className="gsr-cardTitle">Gold</div>
@@ -1255,14 +1266,24 @@ export default function App() {
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip text="Sample tooltip: This shows how much the Gold-only strategy value changed (USD) from the start date to the end date." />
+                      <InfoTip
+                        id="gold_change"
+                        activeId={activeTipId}
+                        setActiveId={setActiveTipId}
+                        text="Sample tooltip: This shows how much the Gold-only strategy value changed (USD) from the start date to the end date."
+                      />
                     </span>
                     <span className="gsr-strong">${fmt0(stats.gchg)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip text="Sample tooltip: Percentage return if you stayed fully in Gold over the selected period." />
+                      <InfoTip
+                        id="gold_return"
+                        activeId={activeTipId}
+                        setActiveId={setActiveTipId}
+                        text="Sample tooltip: Percentage return if you stayed fully in Gold over the selected period."
+                      />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
                   </div>
@@ -1278,14 +1299,24 @@ export default function App() {
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip text="Sample tooltip: This shows how much the Silver-only strategy value changed (USD) from the start date to the end date." />
+                      <InfoTip
+                        id="silver_change"
+                        activeId={activeTipId}
+                        setActiveId={setActiveTipId}
+                        text="Sample tooltip: This shows how much the Silver-only strategy value changed (USD) from the start date to the end date."
+                      />
                     </span>
                     <span className="gsr-strong">${fmt0(stats.schg)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip text="Sample tooltip: Percentage return if you stayed fully in Silver over the selected period." />
+                      <InfoTip
+                        id="silver_return"
+                        activeId={activeTipId}
+                        setActiveId={setActiveTipId}
+                        text="Sample tooltip: Percentage return if you stayed fully in Silver over the selected period."
+                      />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.spct)}%</span>
                   </div>
@@ -1302,7 +1333,12 @@ export default function App() {
               <div className="gsr-portfolioGrid">
                 <div className="gsr-muted">
                   Change:
-                  <InfoTip text="Sample tooltip: Your switching strategy total change and % return across the selected time period." />
+                  <InfoTip
+                    id="p_change"
+                    activeId={activeTipId}
+                    setActiveId={setActiveTipId}
+                    text="Sample tooltip: Your switching strategy total change and % return across the selected time period."
+                  />
                 </div>
                 <div className="right gsr-strong">
                   ${fmt0(stats.pchg)} | {fmt0(stats.ppct)}%
@@ -1310,37 +1346,67 @@ export default function App() {
 
                 <div className="gsr-muted">
                   Duration:
-                  <InfoTip text="Sample tooltip: Total time between your chosen start date and end date (years + months)." />
+                  <InfoTip
+                    id="p_duration"
+                    activeId={activeTipId}
+                    setActiveId={setActiveTipId}
+                    text="Sample tooltip: Total time between your chosen start date and end date (years + months)."
+                  />
                 </div>
                 <div className="right gsr-strong">{durationText}</div>
 
                 <div className="gsr-muted">
                   Beats Gold (Time):
-                  <InfoTip text="Sample tooltip: % of days where the strategy value is higher than staying in Gold." />
+                  <InfoTip
+                    id="p_beats_g"
+                    activeId={activeTipId}
+                    setActiveId={setActiveTipId}
+                    text="Sample tooltip: % of days where the strategy value is higher than staying in Gold."
+                  />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsG)}%</div>
 
                 <div className="gsr-muted">
                   Beats Silver (Time):
-                  <InfoTip text="Sample tooltip: % of days where the strategy value is higher than staying in Silver." />
+                  <InfoTip
+                    id="p_beats_s"
+                    activeId={activeTipId}
+                    setActiveId={setActiveTipId}
+                    text="Sample tooltip: % of days where the strategy value is higher than staying in Silver."
+                  />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsS)}%</div>
 
                 <div className="gsr-muted">
                   vs Gold:
-                  <InfoTip text="Sample tooltip: Strategy return minus Gold-only return (percentage points)." />
+                  <InfoTip
+                    id="p_vs_g"
+                    activeId={activeTipId}
+                    setActiveId={setActiveTipId}
+                    text="Sample tooltip: Strategy return minus Gold-only return (percentage points)."
+                  />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPg)}%</div>
 
                 <div className="gsr-muted">
                   vs Silver:
-                  <InfoTip text="Sample tooltip: Strategy return minus Silver-only return (percentage points)." />
+                  <InfoTip
+                    id="p_vs_s"
+                    activeId={activeTipId}
+                    setActiveId={setActiveTipId}
+                    text="Sample tooltip: Strategy return minus Silver-only return (percentage points)."
+                  />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPs)}%</div>
 
                 <div className="gsr-muted">
                   Switches:
-                  <InfoTip text="Sample tooltip: How many times the strategy switched between Gold and Silver based on your thresholds." />
+                  <InfoTip
+                    id="p_switches"
+                    activeId={activeTipId}
+                    setActiveId={setActiveTipId}
+                    text="Sample tooltip: How many times the strategy switched between Gold and Silver based on your thresholds."
+                  />
                 </div>
                 <div className="right gsr-strong">
                   {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}
@@ -1353,7 +1419,7 @@ export default function App() {
         {err && <p className="gsr-error">Error: {err}</p>}
 
         {/* chart */}
-        <div className="gsr-chartWrap">
+        <div className="gsr-chartWrap" onPointerDown={(e) => e.stopPropagation()}>
           <div className="gsr-chartTop">
             <label className="gsr-toggle">
               <input type="checkbox" checked={show.gold} onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))} />
@@ -1379,7 +1445,12 @@ export default function App() {
 
           <div className="gsr-chartInner">
             <ResponsiveContainer key={chartRemountKey} width="100%" height="100%" debounce={0}>
-              <LineChart key={`lc_${chartRemountKey}`} data={data} margin={CHART_MARGIN}>
+              <LineChart key={`lc_${chartRemountKey}`} data={data} margin={{
+                top: isMobile ? 12 : 20,
+                right: isMobile ? 10 : 15,
+                left: isMobile ? 10 : 15,
+                bottom: isMobile ? 14 : 22,
+              }}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.10} />
 
                 <XAxis
@@ -1405,8 +1476,8 @@ export default function App() {
                   tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={leftDomain}
-                  ticks={leftTicks}
+                  domain={leftIsRatio ? ratioDomain : usdDomain}
+                  ticks={leftIsRatio ? ratioTicks : usdTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
                     hideAxisText || !SHOW_AXIS_LABELS
@@ -1427,8 +1498,8 @@ export default function App() {
                   tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={rightDomain}
-                  ticks={rightTicks}
+                  domain={rightIsRatio ? ratioDomain : usdDomain}
+                  ticks={rightIsRatio ? ratioTicks : usdTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
                     hideAxisText || !SHOW_AXIS_LABELS
@@ -1450,7 +1521,7 @@ export default function App() {
                 )}
 
                 {show.gsr && (
-                  <Line name="GSR" yAxisId={gsrAxisId} type="monotone" dataKey="gsr" stroke="#000000" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
+                  <Line name="GSR" yAxisId="leftAxis" type="monotone" dataKey="gsr" stroke="#000000" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
 
                 {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
