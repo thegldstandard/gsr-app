@@ -268,13 +268,13 @@ function useBreakpoint() {
   return bp;
 }
 
-/* ----------------- tiny info tooltip (tap/hover) ----------------- */
+/* ----------------- info tooltip (NO FLICKER) ----------------- */
 function InfoTip({ text }) {
   const [open, setOpen] = useState(false);
+  const isTouchRef = React.useRef(false);
 
   useEffect(() => {
     const onDoc = (e) => {
-      // close when clicking outside any tooltip
       if (!e.target.closest?.(".gsr-tipWrap")) setOpen(false);
     };
     document.addEventListener("pointerdown", onDoc);
@@ -282,17 +282,27 @@ function InfoTip({ text }) {
   }, []);
 
   return (
-    <span className="gsr-tipWrap">
+    <span
+      className="gsr-tipWrap"
+      onMouseEnter={() => {
+        if (!isTouchRef.current) setOpen(true);
+      }}
+      onMouseLeave={() => {
+        if (!isTouchRef.current) setOpen(false);
+      }}
+    >
       <button
         type="button"
         className="gsr-tipBtn"
         aria-label="Info"
+        onPointerDown={() => {
+          // if user touches, treat as tap-only and avoid hover toggling
+          isTouchRef.current = true;
+        }}
         onClick={(e) => {
           e.stopPropagation();
           setOpen((s) => !s);
         }}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
       >
         i
       </button>
@@ -1066,7 +1076,7 @@ export default function App() {
 
         .gsr-twoLine{ display:flex; flex-direction:column; gap:8px; }
         .gsr-row{ display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
-        .gsr-muted{ color:#486076; font-weight: 900; }
+        .gsr-muted{ color:#486076; font-weight: 900; display:inline-flex; align-items:center; }
         .gsr-strong{ color:#0b1b2a; font-weight: 1000; }
 
         .gsr-card--portfolio{
@@ -1123,7 +1133,7 @@ export default function App() {
           justify-content:center;
         }
 
-        /* ✅ info tooltip styling */
+        /* ✅ tooltips (stable; no hover flicker) */
         .gsr-tipWrap{
           position: relative;
           display:inline-flex;
@@ -1164,6 +1174,7 @@ export default function App() {
           font-size: 13px;
           font-weight: 900;
           line-height: 1.25;
+          pointer-events: none; /* ✅ prevents hover flicker */
         }
         .gsr-tipBubble::after{
           content:"";
@@ -1345,38 +1356,22 @@ export default function App() {
         <div className="gsr-chartWrap">
           <div className="gsr-chartTop">
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.gold}
-                onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.gold} onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#f2c36b" }} />
               Gold
             </label>
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.silver}
-                onChange={(e) => setShow((s) => ({ ...s, silver: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.silver} onChange={(e) => setShow((s) => ({ ...s, silver: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#0e2d4a" }} />
               Silver
             </label>
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.strat}
-                onChange={(e) => setShow((s) => ({ ...s, strat: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.strat} onChange={(e) => setShow((s) => ({ ...s, strat: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#a77d52" }} />
               My Portfolio
             </label>
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.gsr}
-                onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.gsr} onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#000000" }} />
               GSR
             </label>
@@ -1390,9 +1385,7 @@ export default function App() {
                 <XAxis
                   dataKey="date"
                   tickFormatter={(d) =>
-                    d instanceof Date
-                      ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" })
-                      : d
+                    d instanceof Date ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" }) : d
                   }
                   tick={{ fontSize: xTickFont, fontWeight: 900, fill: AXIS_COLOR }}
                   minTickGap={isMobile ? 24 : 18}
@@ -1418,13 +1411,7 @@ export default function App() {
                   label={
                     hideAxisText || !SHOW_AXIS_LABELS
                       ? undefined
-                      : {
-                          value: leftLabel,
-                          angle: -90,
-                          position: "insideLeft",
-                          fill: AXIS_COLOR,
-                          fontWeight: 900,
-                        }
+                      : { value: leftLabel, angle: -90, position: "insideLeft", fill: AXIS_COLOR, fontWeight: 900 }
                   }
                 />
 
@@ -1446,74 +1433,24 @@ export default function App() {
                   label={
                     hideAxisText || !SHOW_AXIS_LABELS
                       ? undefined
-                      : {
-                          value: rightLabel,
-                          angle: 90,
-                          position: "insideRight",
-                          fill: AXIS_COLOR,
-                          fontWeight: 900,
-                        }
+                      : { value: rightLabel, angle: 90, position: "insideRight", fill: AXIS_COLOR, fontWeight: 900 }
                   }
                 />
 
                 <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
 
                 {show.gold && (
-                  <Line
-                    name="Gold"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="goldValue"
-                    stroke="#f2c36b"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="Gold" yAxisId={usdAxisId} type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
                 {show.silver && (
-                  <Line
-                    name="Silver"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="silverValue"
-                    stroke="#0e2d4a"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="Silver" yAxisId={usdAxisId} type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
                 {show.strat && (
-                  <Line
-                    name="My Portfolio"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="strat"
-                    stroke="#a77d52"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="My Portfolio" yAxisId={usdAxisId} type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
 
                 {show.gsr && (
-                  <Line
-                    name="GSR"
-                    yAxisId={gsrAxisId}
-                    type="monotone"
-                    dataKey="gsr"
-                    stroke="#000000"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="GSR" yAxisId={gsrAxisId} type="monotone" dataKey="gsr" stroke="#000000" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
 
                 {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
