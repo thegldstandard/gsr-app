@@ -115,7 +115,7 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
   return niceTicks(paddedMin, paddedMax, target);
 }
 
-/* ---- CSV-first; API only to top-up the latest day ---- */
+/* ---- CSV-first; API only to top-up the latest day (>=1990) ---- */
 async function fetchCSVText() {
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
 
@@ -180,15 +180,18 @@ async function fetchLatestFromAPI() {
   }
 }
 
-/* ----------------- responsive hook (visualViewport-aware) ----------------- */
+/* ----------------- bulletproof breakpoint hook -----------------
+   Fixes Chrome / WebView / DuckDuckGo where address bar collapse can change height
+   WITHOUT a reliable resize event.
+----------------------------------------------------------------- */
 function useBreakpoint() {
   const read = () => {
     const w = typeof window !== "undefined" ? window.innerWidth : 1200;
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
-    const h = vv?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800);
+    const h = Math.round(vv?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800));
 
     return {
-      w,
+      w: Math.round(w),
       h,
       isMobile: w <= 640,
       isTablet: w > 640 && w <= 1024,
@@ -199,31 +202,71 @@ function useBreakpoint() {
   const [bp, setBp] = useState(read);
 
   useEffect(() => {
-    const onAny = () => setBp(read());
+    let rafId = 0;
+    let last = read();
+    let pollUntil = 0;
 
-    window.addEventListener("resize", onAny, { passive: true });
-    window.addEventListener("orientationchange", onAny, { passive: true });
+    const applyIfChanged = () => {
+      const next = read();
+      if (next.w !== last.w || next.h !== last.h || next.isLandscape !== last.isLandscape) {
+        last = next;
+        setBp(next);
+      }
+    };
+
+    const pollLoop = () => {
+      applyIfChanged();
+      if (performance.now() < pollUntil) {
+        rafId = requestAnimationFrame(pollLoop);
+      } else {
+        rafId = 0;
+      }
+    };
+
+    const startShortPoll = (ms = 900) => {
+      pollUntil = performance.now() + ms;
+      if (!rafId) rafId = requestAnimationFrame(pollLoop);
+    };
+
+    const onResize = () => {
+      applyIfChanged();
+      startShortPoll(900);
+    };
+
+    const onScroll = () => {
+      // Catch toolbar collapse/expand that changes viewport height while scrolling
+      startShortPoll(1200);
+    };
+
+    window.addEventListener("resize", onResize, { passive: true });
+    window.addEventListener("orientationchange", onResize, { passive: true });
+    window.addEventListener("scroll", onScroll, { passive: true });
 
     const vv = window.visualViewport;
     if (vv) {
-      vv.addEventListener("resize", onAny, { passive: true });
-      vv.addEventListener("scroll", onAny, { passive: true });
-    } else {
-      window.addEventListener("scroll", onAny, { passive: true });
+      vv.addEventListener("resize", onResize, { passive: true });
+      vv.addEventListener("scroll", onScroll, { passive: true });
     }
 
-    // initial sync (important on iOS)
-    onAny();
+    const onVis = () => {
+      if (document.visibilityState === "visible") startShortPoll(1200);
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    // Initial sync
+    applyIfChanged();
+    startShortPoll(600);
 
     return () => {
-      window.removeEventListener("resize", onAny);
-      window.removeEventListener("orientationchange", onAny);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      window.removeEventListener("scroll", onScroll);
       if (vv) {
-        vv.removeEventListener("resize", onAny);
-        vv.removeEventListener("scroll", onAny);
-      } else {
-        window.removeEventListener("scroll", onAny);
+        vv.removeEventListener("resize", onResize);
+        vv.removeEventListener("scroll", onScroll);
       }
+      document.removeEventListener("visibilitychange", onVis);
+      if (rafId) cancelAnimationFrame(rafId);
     };
   }, []);
 
@@ -294,7 +337,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
   );
 }
 
-/* ----------------- Currency input ----------------- */
+/* ----------------- Currency input (commas, no decimals) ----------------- */
 function CurrencyInput({ value, onChange, className = "" }) {
   const [txt, setTxt] = useState((value ?? 0).toLocaleString("en-GB"));
 
@@ -320,7 +363,7 @@ function CurrencyInput({ value, onChange, className = "" }) {
 }
 
 /* ----------------- tooltip ----------------- */
-function CustomTooltip({ active, label, payload, isMobile }) {
+function CustomTooltip({ active, label, payload }) {
   if (!active || !payload?.length) return null;
 
   const dt =
@@ -351,19 +394,17 @@ function CustomTooltip({ active, label, payload, isMobile }) {
       style={{
         background: "rgba(255,255,255,0.96)",
         borderRadius: 12,
-        padding: isMobile ? "8px 10px" : "10px 12px",
+        padding: "10px 12px",
         color: "#0b1b2a",
         boxShadow: "0 10px 25px rgba(0,0,0,0.22)",
-        minWidth: isMobile ? 180 : 220,
-        maxWidth: isMobile ? 240 : 320,
+        minWidth: 220,
+        maxWidth: 320,
       }}
     >
-      <div style={{ fontWeight: 1000, marginBottom: 8, fontSize: isMobile ? 12 : 14 }}>
-        {labelText}
-      </div>
-      <div style={{ display: "grid", gap: 6, fontSize: isMobile ? 12 : 14 }}>
+      <div style={{ fontWeight: 1000, marginBottom: 8 }}>{labelText}</div>
+      <div style={{ display: "grid", gap: 6 }}>
         {rows.map((r) => (
-          <div key={r.name} style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+          <div key={r.name} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
               <span
                 style={{
@@ -384,7 +425,7 @@ function CustomTooltip({ active, label, payload, isMobile }) {
   );
 }
 
-/* -------- duration between 2 dates -------- */
+/* -------- duration between 2 dates (years + months) -------- */
 function diffYearsMonths(startDate, endDate) {
   if (!startDate || !endDate) return { years: 0, months: 0 };
   let months =
@@ -412,26 +453,20 @@ export default function App() {
   const [s2g, setS2G] = useState(65);
   const [startMetal, setStartMetal] = useState("silver");
 
-  /* ================= RESPONSIVE AXIS/CHART SETTINGS ================= */
+  /* ================= MANUAL AXIS SETTINGS (RESPONSIVE) ================= */
   const AXIS_COLOR = "#0b1b2a";
   const AXIS_WIDTH = isMobile ? 64 : isTablet ? 88 : 120;
-
   const LEFT_LABEL_OFFSET = 0;
   const RIGHT_LABEL_OFFSET = 0;
   const LEFT_LABEL_DY = 0;
   const RIGHT_LABEL_DY = 0;
 
   const CHART_MARGIN = useMemo(
-    () => ({
-      top: isMobile ? 12 : 20,
-      right: isMobile ? 8 : 15,
-      left: isMobile ? 8 : 15,
-      bottom: isMobile ? 14 : 22,
-    }),
+    () => ({ top: isMobile ? 12 : 20, right: isMobile ? 8 : 15, left: isMobile ? 8 : 15, bottom: isMobile ? 14 : 22 }),
     [isMobile]
   );
 
-  // ✅ Uses visualViewport-aware height (h) so it stays correct after rotate + scroll
+  // ✅ Uses viewport height that updates during scroll/toolbars collapse (via hook)
   const CHART_HEIGHT = useMemo(() => {
     const vh = h;
     const vw = w;
@@ -442,7 +477,7 @@ export default function App() {
     if (isTablet) return 520;
     return 660;
   }, [isMobile, isTablet, w, h]);
-  /* ================================================================= */
+  /* ==================================================================== */
 
   useEffect(() => {
     (async () => {
@@ -745,9 +780,9 @@ export default function App() {
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { usdDomain: ["auto", "auto"], usdTicks: undefined };
 
-    const out = niceTicksWithPadding(min, max, isMobile ? 5 : 7, 0.06, true);
+    const out = niceTicksWithPadding(min, max, 7, 0.06, true);
     return { usdDomain: out.domain, usdTicks: out.ticks };
-  }, [data, show, isMobile]);
+  }, [data, show]);
 
   const { ratioDomain, ratioTicks } = useMemo(() => {
     if (!data.length) return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
@@ -765,9 +800,9 @@ export default function App() {
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
 
-    const out = niceTicksWithPadding(min, max, isMobile ? 5 : 7, 0.06, false);
+    const out = niceTicksWithPadding(min, max, 7, 0.06, false);
     return { ratioDomain: out.domain, ratioTicks: out.ticks };
-  }, [data, isMobile]);
+  }, [data]);
 
   const anyUsdOn = show.gold || show.silver || show.strat;
   const gsrOn = show.gsr;
@@ -817,17 +852,18 @@ export default function App() {
     });
   }, [axisMode, show, leftDomain, leftTicks, rightDomain, rightTicks, usdAxisId]);
 
-  const xTickFormatter = (d) => {
-    const dt = d instanceof Date ? d : new Date(d);
-    if (!dt || isNaN(+dt)) return "";
-    if (isMobile) return dt.toLocaleDateString("en-GB", { month: "short", year: "2-digit" });
-    return dt.toLocaleDateString("en-GB", { year: "2-digit", month: "short" });
-  };
-
-  const axisTickFontSize = isMobile ? 11 : 13;
+  // ✅ Forces Recharts to recompute layout when height changes (Chrome/WebView fix)
+  const chartRemountKey = useMemo(() => {
+    return JSON.stringify({
+      chartH: CHART_HEIGHT,
+      w,
+      vh: h,
+      axisKeyPart,
+    });
+  }, [CHART_HEIGHT, w, h, axisKeyPart]);
 
   return (
-    <div className="gsr-page" style={{ ["--chartH"]: `${CHART_HEIGHT}px` }}>
+    <div className="gsr-page">
       <style>{`
         :root{
           --bg:#123a5a;
@@ -842,7 +878,7 @@ export default function App() {
         *{box-sizing:border-box}
         body{margin:0;background:var(--bg)}
         .gsr-page{
-          min-height: 100dvh; /* ✅ dynamic viewport height */
+          min-height:100dvh;
           background:linear-gradient(180deg,#0f2d47 0%, #123a5a 55%, #123a5a 100%);
           padding: 22px 18px 34px;
           color:white;
@@ -870,17 +906,9 @@ export default function App() {
         @media (max-width: 1200px){
           .gsr-controls{ grid-template-columns: 1fr 1fr; gap: 12px; }
         }
-        @media (max-width: 640px){
-          .gsr-page{ padding: 16px 12px 24px; }
-          .gsr-title{ font-size: 36px; }
-          .gsr-title-underline{ width: 200px; }
-          .gsr-controls{ grid-template-columns: 1fr; gap: 10px; }
-          :root{ --ctrlH: 42px; }
-        }
 
         .gsr-control{display:flex; flex-direction:column; gap:6px; min-width:0;}
         .gsr-label{ font-size: 13px; color: rgba(255,255,255,0.75); font-weight: 800; text-align:center; }
-        @media (max-width: 640px){ .gsr-label{ font-size: 12px; } }
 
         .gsr-pill{
           height: var(--ctrlH);
@@ -895,7 +923,7 @@ export default function App() {
           min-width: 0;
           text-align: center;
           line-height: var(--ctrlH);
-          font-size: 16px; /* iOS zoom prevention */
+          font-size: 16px;
         }
         .gsr-pillReadOnly{
           height: var(--ctrlH);
@@ -915,7 +943,6 @@ export default function App() {
           font-size: 16px;
         }
         .gsr-pill--small{ padding: 0 10px; font-size: 14px; font-weight: 1000; }
-        @media (max-width: 640px){ .gsr-pill--small{ font-size: 16px; } }
         .gsr-pillSelect{ text-align: center; text-align-last: center; }
         .gsr-pillSelect option{ text-align:left; }
 
@@ -932,15 +959,15 @@ export default function App() {
           min-width: 0;
         }
         .gsr-dateSeg{
-          width: 44px;
+          width: 40px;
           height: calc(var(--ctrlH) - 8px);
           border: 0; outline: none;
           text-align:center; font-weight: 1000;
           color: #0b1b2a; background: transparent;
           min-width: 0;
-          font-size: 16px; /* iOS zoom prevention */
+          font-size: 16px;
         }
-        .gsr-dateYear{width: 74px;}
+        .gsr-dateYear{width: 70px;}
         .gsr-dateSlash{color:#64748b; font-weight:1000;}
         .gsr-datePills--compact{ gap:6px; padding: 0 8px; }
         .is-compact .gsr-label{ font-size: 12px; }
@@ -1014,45 +1041,6 @@ export default function App() {
         }
         .gsr-portfolioGrid .right{ text-align:right; }
 
-        @media (max-width: 640px){
-          .gsr-cardTitle{ font-size: 34px; }
-          .gsr-cardValue{ font-size: 24px; }
-          .gsr-card--portfolio .gsr-cardTitle{ font-size: 40px; }
-          .gsr-card--portfolio .gsr-cardValue{ font-size: 30px; }
-          .gsr-card--portfolio .gsr-cardInner{ font-size: 16px; }
-        }
-
-        /* ✅ PHONE LANDSCAPE: fill width + reduce wasted vertical space */
-        @media (max-width: 900px) and (orientation: landscape){
-          .gsr-page{ padding: 10px 10px 14px; }
-          .gsr-title{ font-size: 30px; }
-          .gsr-title-underline{ width: 180px; }
-
-          .gsr-controls{
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-          }
-
-          .gsr-cards{
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-          }
-
-          .gsr-leftStack{
-            grid-template-rows: none;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-          }
-
-          .gsr-cardTitle{ font-size: 30px; }
-          .gsr-cardValue{ font-size: 22px; }
-          .gsr-card--portfolio .gsr-cardTitle{ font-size: 34px; }
-          .gsr-card--portfolio .gsr-cardValue{ font-size: 26px; }
-          .gsr-card--portfolio .gsr-cardInner{ font-size: 15px; }
-
-          .gsr-chartWrap{ padding: 8px 8px 10px; }
-        }
-
         .gsr-error{color:#ffb4b4; font-weight:900;}
 
         .gsr-chartWrap{
@@ -1068,9 +1056,6 @@ export default function App() {
           padding: 6px 6px 8px;
           flex-wrap: wrap;
         }
-        @media (max-width: 640px){
-          .gsr-chartTop{ justify-content:flex-start; gap: 10px; }
-        }
         .gsr-toggle{
           display:flex; align-items:center; gap:6px;
           color: #0b1b2a;
@@ -1079,16 +1064,16 @@ export default function App() {
           white-space:nowrap;
           font-size: 14px;
         }
-        .gsr-toggle input{ width: 18px; height: 18px; }
-        @media (max-width: 640px){ .gsr-toggle{ font-size: 13px; } }
-        .gsr-dot{ width: 11px; height: 11px; border-radius: 999px; display:inline-block; }
+        .gsr-dot{
+          width: 11px; height: 11px; border-radius: 999px; display:inline-block;
+        }
         .gsr-chartInner{
           width: 100%;
-          height: var(--chartH);
+          height: ${CHART_HEIGHT}px;
+          max-height: 90dvh; /* ✅ guard against weird oversize during toolbar changes */
           display:flex;
           align-items:center;
           justify-content:center;
-          touch-action: pan-y;
         }
       `}</style>
 
@@ -1105,14 +1090,26 @@ export default function App() {
             <CurrencyInput value={amount} onChange={setAmount} />
           </div>
 
-          <DatePills label="Start Date (DD/MM/YYYY)" valueIso={startIso} onChangeIso={setStartIso} compact />
+          <DatePills
+            label="Start Date (DD/MM/YYYY)"
+            valueIso={startIso}
+            onChangeIso={setStartIso}
+            compact
+          />
 
           <div className="gsr-control">
             <span className="gsr-label">Ratio on Start Date</span>
-            <div className="gsr-pillReadOnly gsr-pill--small">{startRatio != null ? fmt0(startRatio) : "—"}</div>
+            <div className="gsr-pillReadOnly gsr-pill--small">
+              {startRatio != null ? fmt0(startRatio) : "—"}
+            </div>
           </div>
 
-          <DatePills label="End Date (DD/MM/YYYY)" valueIso={endIso} onChangeIso={setEndIso} compact />
+          <DatePills
+            label="End Date (DD/MM/YYYY)"
+            valueIso={endIso}
+            onChangeIso={setEndIso}
+            compact
+          />
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
@@ -1215,7 +1212,8 @@ export default function App() {
 
                 <div className="gsr-muted">Switches:</div>
                 <div className="right gsr-strong">
-                  {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}
+                  {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span>{" "}
+                  {stats.endsIn}
                 </div>
               </div>
             </div>
@@ -1266,18 +1264,20 @@ export default function App() {
           </div>
 
           <div className="gsr-chartInner">
-            <ResponsiveContainer width="100%" height="100%" debounce={0}>
-              <LineChart data={data} margin={CHART_MARGIN}>
+            <ResponsiveContainer key={chartRemountKey} width="100%" height="100%" debounce={0}>
+              <LineChart key={`lc_${chartRemountKey}`} data={data} margin={CHART_MARGIN}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.10} />
 
                 <XAxis
                   dataKey="date"
-                  tickFormatter={xTickFormatter}
-                  minTickGap={isMobile ? 26 : 18}
+                  tickFormatter={(d) =>
+                    d instanceof Date
+                      ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" })
+                      : d
+                  }
+                  minTickGap={18}
                   tickMargin={10}
                   padding={{ left: 6, right: 6 }}
-                  tick={{ fontSize: axisTickFontSize, fontWeight: 900, fill: "#0b1b2a" }}
-                  stroke="#0b1b2a"
                 />
 
                 <YAxis
@@ -1289,12 +1289,8 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={
-                    hideAxisText
-                      ? false
-                      : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }
-                  }
-                  tickMargin={10}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900 }}
+                  tickMargin={12}
                   width={AXIS_WIDTH}
                   domain={leftDomain}
                   ticks={leftTicks}
@@ -1310,7 +1306,6 @@ export default function App() {
                           dy: LEFT_LABEL_DY,
                           fill: AXIS_COLOR,
                           fontWeight: 900,
-                          fontSize: isMobile ? 11 : 13,
                         }
                   }
                 />
@@ -1324,12 +1319,8 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={
-                    hideAxisText
-                      ? false
-                      : { fill: AXIS_COLOR, fontWeight: 900, fontSize: axisTickFontSize }
-                  }
-                  tickMargin={10}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900 }}
+                  tickMargin={12}
                   width={AXIS_WIDTH}
                   domain={rightDomain}
                   ticks={rightTicks}
@@ -1345,16 +1336,11 @@ export default function App() {
                           dy: RIGHT_LABEL_DY,
                           fill: AXIS_COLOR,
                           fontWeight: 900,
-                          fontSize: isMobile ? 11 : 13,
                         }
                   }
                 />
 
-                <Tooltip
-                  content={<CustomTooltip isMobile={isMobile} />}
-                  cursor={{ strokeOpacity: 0.25 }}
-                  isAnimationActive={false}
-                />
+                <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
 
                 {show.gold && (
                   <Line
@@ -1365,7 +1351,7 @@ export default function App() {
                     stroke="#f2c36b"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: isMobile ? 5 : 4 }}
+                    activeDot={{ r: 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
@@ -1379,7 +1365,7 @@ export default function App() {
                     stroke="#0e2d4a"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: isMobile ? 5 : 4 }}
+                    activeDot={{ r: 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
@@ -1393,7 +1379,7 @@ export default function App() {
                     stroke="#a77d52"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: isMobile ? 5 : 4 }}
+                    activeDot={{ r: 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
@@ -1408,32 +1394,18 @@ export default function App() {
                     stroke="#000000"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: isMobile ? 5 : 4 }}
+                    activeDot={{ r: 4 }}
                     connectNulls
                     isAnimationActive={false}
                   />
                 )}
 
-                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") &&
-                  show.gsr &&
-                  Number.isFinite(g2s) && (
-                    <ReferenceLine
-                      yAxisId="leftAxis"
-                      y={g2s}
-                      stroke="#94a3b8"
-                      strokeDasharray="4 4"
-                    />
-                  )}
-                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") &&
-                  show.gsr &&
-                  Number.isFinite(s2g) && (
-                    <ReferenceLine
-                      yAxisId="leftAxis"
-                      y={s2g}
-                      stroke="#94a3b8"
-                      strokeDasharray="4 4"
-                    />
-                  )}
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
+                  <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />
+                )}
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(s2g) && (
+                  <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />
+                )}
 
                 {axisMode === "USD_BOTH" && (
                   <Line
