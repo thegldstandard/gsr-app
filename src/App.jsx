@@ -180,10 +180,7 @@ async function fetchLatestFromAPI() {
   }
 }
 
-/* ----------------- bulletproof breakpoint hook -----------------
-   Fixes Chrome / WebView / DuckDuckGo where address bar collapse can change height
-   WITHOUT a reliable resize event.
------------------------------------------------------------------ */
+/* ----------------- bulletproof breakpoint hook ----------------- */
 function useBreakpoint() {
   const read = () => {
     const w = typeof window !== "undefined" ? window.innerWidth : 1200;
@@ -234,7 +231,6 @@ function useBreakpoint() {
     };
 
     const onScroll = () => {
-      // Catch toolbar collapse/expand that changes viewport height while scrolling
       startShortPoll(1200);
     };
 
@@ -253,7 +249,6 @@ function useBreakpoint() {
     };
     document.addEventListener("visibilitychange", onVis);
 
-    // Initial sync
     applyIfChanged();
     startShortPoll(600);
 
@@ -337,7 +332,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
   );
 }
 
-/* ----------------- Currency input (commas, no decimals) ----------------- */
+/* ----------------- Currency input ----------------- */
 function CurrencyInput({ value, onChange, className = "" }) {
   const [txt, setTxt] = useState((value ?? 0).toLocaleString("en-GB"));
 
@@ -398,7 +393,7 @@ function CustomTooltip({ active, label, payload }) {
         color: "#0b1b2a",
         boxShadow: "0 10px 25px rgba(0,0,0,0.22)",
         minWidth: 220,
-        maxWidth: 320,
+        maxWidth: 340,
       }}
     >
       <div style={{ fontWeight: 1000, marginBottom: 8 }}>{labelText}</div>
@@ -425,7 +420,6 @@ function CustomTooltip({ active, label, payload }) {
   );
 }
 
-/* -------- duration between 2 dates (years + months) -------- */
 function diffYearsMonths(startDate, endDate) {
   if (!startDate || !endDate) return { years: 0, months: 0 };
   let months =
@@ -453,20 +447,25 @@ export default function App() {
   const [s2g, setS2G] = useState(65);
   const [startMetal, setStartMetal] = useState("silver");
 
-  /* ================= MANUAL AXIS SETTINGS (RESPONSIVE) ================= */
+  /* ================= RESPONSIVE CHART SETTINGS ================= */
   const AXIS_COLOR = "#0b1b2a";
-  const AXIS_WIDTH = isMobile ? 64 : isTablet ? 88 : 120;
-  const LEFT_LABEL_OFFSET = 0;
-  const RIGHT_LABEL_OFFSET = 0;
-  const LEFT_LABEL_DY = 0;
-  const RIGHT_LABEL_DY = 0;
+
+  // Give ticks enough room, but not too much
+  const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
+
+  // On mobile, hide axis LABEL text entirely to prevent overlap (ticks remain).
+  const SHOW_AXIS_LABELS = !isMobile;
 
   const CHART_MARGIN = useMemo(
-    () => ({ top: isMobile ? 12 : 20, right: isMobile ? 8 : 15, left: isMobile ? 8 : 15, bottom: isMobile ? 14 : 22 }),
+    () => ({
+      top: isMobile ? 12 : 20,
+      right: isMobile ? 10 : 15,
+      left: isMobile ? 10 : 15,
+      bottom: isMobile ? 14 : 22,
+    }),
     [isMobile]
   );
 
-  // ✅ Uses viewport height that updates during scroll/toolbars collapse (via hook)
   const CHART_HEIGHT = useMemo(() => {
     const vh = h;
     const vw = w;
@@ -477,7 +476,7 @@ export default function App() {
     if (isTablet) return 520;
     return 660;
   }, [isMobile, isTablet, w, h]);
-  /* ==================================================================== */
+  /* ============================================================ */
 
   useEffect(() => {
     (async () => {
@@ -852,7 +851,6 @@ export default function App() {
     });
   }, [axisMode, show, leftDomain, leftTicks, rightDomain, rightTicks, usdAxisId]);
 
-  // ✅ Forces Recharts to recompute layout when height changes (Chrome/WebView fix)
   const chartRemountKey = useMemo(() => {
     return JSON.stringify({
       chartH: CHART_HEIGHT,
@@ -861,6 +859,10 @@ export default function App() {
       axisKeyPart,
     });
   }, [CHART_HEIGHT, w, h, axisKeyPart]);
+
+  const yTickFont = isMobile ? 11 : 13;
+  const xTickFont = isMobile ? 11 : 12;
+  const yTickMargin = isMobile ? 8 : 12;
 
   return (
     <div className="gsr-page">
@@ -873,7 +875,7 @@ export default function App() {
           --pill:#ffffff;
           --shadow: 0 16px 40px rgba(0,0,0,0.25);
           --radius: 22px;
-          --ctrlH: 36px;
+          --ctrlH: 40px; /* a touch taller for mobile */
         }
         *{box-sizing:border-box}
         body{margin:0;background:var(--bg)}
@@ -906,6 +908,9 @@ export default function App() {
         @media (max-width: 1200px){
           .gsr-controls{ grid-template-columns: 1fr 1fr; gap: 12px; }
         }
+        @media (max-width: 520px){
+          .gsr-controls{ grid-template-columns: 1fr; }
+        }
 
         .gsr-control{display:flex; flex-direction:column; gap:6px; min-width:0;}
         .gsr-label{ font-size: 13px; color: rgba(255,255,255,0.75); font-weight: 800; text-align:center; }
@@ -915,7 +920,7 @@ export default function App() {
           width: 100%;
           border-radius: 999px;
           border: 0;
-          padding: 0 12px;
+          padding: 0 14px;
           background: var(--pill);
           color: #0b1b2a;
           outline: none;
@@ -930,7 +935,7 @@ export default function App() {
           width: 100%;
           border-radius: 999px;
           border: 0;
-          padding: 0 12px;
+          padding: 0 14px;
           background: #efe7dc;
           color: #0b1b2a;
           outline: none;
@@ -946,6 +951,7 @@ export default function App() {
         .gsr-pillSelect{ text-align: center; text-align-last: center; }
         .gsr-pillSelect option{ text-align:left; }
 
+        /* ✅ DATE PILLS: widen segments + prevent clipping */
         .gsr-datePills{
           height: var(--ctrlH);
           width: 100%;
@@ -953,24 +959,32 @@ export default function App() {
           align-items:center;
           justify-content:center;
           gap:8px;
-          padding: 0 10px;
+          padding: 0 12px;
           background: var(--pill);
           border-radius: 999px;
           min-width: 0;
         }
         .gsr-dateSeg{
-          width: 40px;
-          height: calc(var(--ctrlH) - 8px);
+          width: 46px;              /* was 40 */
+          height: calc(var(--ctrlH) - 10px);
           border: 0; outline: none;
           text-align:center; font-weight: 1000;
           color: #0b1b2a; background: transparent;
           min-width: 0;
           font-size: 16px;
+          line-height: 1;
+          padding: 0;
         }
-        .gsr-dateYear{width: 70px;}
+        .gsr-dateYear{width: 88px;} /* was 70 */
         .gsr-dateSlash{color:#64748b; font-weight:1000;}
-        .gsr-datePills--compact{ gap:6px; padding: 0 8px; }
+        .gsr-datePills--compact{ gap:6px; padding: 0 10px; }
         .is-compact .gsr-label{ font-size: 12px; }
+
+        @media (max-width: 420px){
+          .gsr-dateSeg{ width: 42px; font-size: 15px; }
+          .gsr-dateYear{ width: 82px; font-size: 15px; }
+          .gsr-pill{ font-size: 15px; }
+        }
 
         .gsr-cards{
           display:grid;
@@ -1070,7 +1084,7 @@ export default function App() {
         .gsr-chartInner{
           width: 100%;
           height: ${CHART_HEIGHT}px;
-          max-height: 90dvh; /* ✅ guard against weird oversize during toolbar changes */
+          max-height: 90dvh;
           display:flex;
           align-items:center;
           justify-content:center;
@@ -1090,26 +1104,14 @@ export default function App() {
             <CurrencyInput value={amount} onChange={setAmount} />
           </div>
 
-          <DatePills
-            label="Start Date (DD/MM/YYYY)"
-            valueIso={startIso}
-            onChangeIso={setStartIso}
-            compact
-          />
+          <DatePills label="Start Date (DD/MM/YYYY)" valueIso={startIso} onChangeIso={setStartIso} compact />
 
           <div className="gsr-control">
             <span className="gsr-label">Ratio on Start Date</span>
-            <div className="gsr-pillReadOnly gsr-pill--small">
-              {startRatio != null ? fmt0(startRatio) : "—"}
-            </div>
+            <div className="gsr-pillReadOnly gsr-pill--small">{startRatio != null ? fmt0(startRatio) : "—"}</div>
           </div>
 
-          <DatePills
-            label="End Date (DD/MM/YYYY)"
-            valueIso={endIso}
-            onChangeIso={setEndIso}
-            compact
-          />
+          <DatePills label="End Date (DD/MM/YYYY)" valueIso={endIso} onChangeIso={setEndIso} compact />
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
@@ -1212,8 +1214,7 @@ export default function App() {
 
                 <div className="gsr-muted">Switches:</div>
                 <div className="right gsr-strong">
-                  {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span>{" "}
-                  {stats.endsIn}
+                  {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}
                 </div>
               </div>
             </div>
@@ -1275,7 +1276,8 @@ export default function App() {
                       ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" })
                       : d
                   }
-                  minTickGap={18}
+                  tick={{ fontSize: xTickFont, fontWeight: 900, fill: AXIS_COLOR }}
+                  minTickGap={isMobile ? 24 : 18}
                   tickMargin={10}
                   padding={{ left: 6, right: 6 }}
                 />
@@ -1289,21 +1291,19 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900 }}
-                  tickMargin={12}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
                   domain={leftDomain}
                   ticks={leftTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
-                    hideAxisText
+                    hideAxisText || !SHOW_AXIS_LABELS
                       ? undefined
                       : {
                           value: leftLabel,
                           angle: -90,
                           position: "insideLeft",
-                          offset: LEFT_LABEL_OFFSET,
-                          dy: LEFT_LABEL_DY,
                           fill: AXIS_COLOR,
                           fontWeight: 900,
                         }
@@ -1319,21 +1319,19 @@ export default function App() {
                   allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
                   tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900 }}
-                  tickMargin={12}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
                   domain={rightDomain}
                   ticks={rightTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
-                    hideAxisText
+                    hideAxisText || !SHOW_AXIS_LABELS
                       ? undefined
                       : {
                           value: rightLabel,
                           angle: 90,
                           position: "insideRight",
-                          offset: RIGHT_LABEL_OFFSET,
-                          dy: RIGHT_LABEL_DY,
                           fill: AXIS_COLOR,
                           fontWeight: 900,
                         }
@@ -1345,7 +1343,7 @@ export default function App() {
                 {show.gold && (
                   <Line
                     name="Gold"
-                    yAxisId={usdAxisId}
+                    yAxisId={axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis"}
                     type="monotone"
                     dataKey="goldValue"
                     stroke="#f2c36b"
@@ -1359,7 +1357,7 @@ export default function App() {
                 {show.silver && (
                   <Line
                     name="Silver"
-                    yAxisId={usdAxisId}
+                    yAxisId={axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis"}
                     type="monotone"
                     dataKey="silverValue"
                     stroke="#0e2d4a"
@@ -1373,7 +1371,7 @@ export default function App() {
                 {show.strat && (
                   <Line
                     name="My Portfolio"
-                    yAxisId={usdAxisId}
+                    yAxisId={axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis"}
                     type="monotone"
                     dataKey="strat"
                     stroke="#a77d52"
@@ -1388,7 +1386,7 @@ export default function App() {
                 {show.gsr && (
                   <Line
                     name="GSR"
-                    yAxisId={gsrAxisId}
+                    yAxisId="leftAxis"
                     type="monotone"
                     dataKey="gsr"
                     stroke="#000000"
