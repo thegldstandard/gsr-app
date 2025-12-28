@@ -268,6 +268,44 @@ function useBreakpoint() {
   return bp;
 }
 
+/* ----------------- tiny info tooltip (tap/hover) ----------------- */
+function InfoTip({ text }) {
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const onDoc = (e) => {
+      // close when clicking outside any tooltip
+      if (!e.target.closest?.(".gsr-tipWrap")) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDoc);
+    return () => document.removeEventListener("pointerdown", onDoc);
+  }, []);
+
+  return (
+    <span className="gsr-tipWrap">
+      <button
+        type="button"
+        className="gsr-tipBtn"
+        aria-label="Info"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((s) => !s);
+        }}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+      >
+        i
+      </button>
+
+      {open && (
+        <span className="gsr-tipBubble" role="tooltip">
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /* ----------------- DD/MM/YYYY pill input ----------------- */
 function DatePills({ label, valueIso, onChangeIso, compact = false }) {
   const d = useMemo(() => fromIsoLocal(valueIso) || new Date(2000, 0, 1), [valueIso]);
@@ -357,7 +395,7 @@ function CurrencyInput({ value, onChange, className = "" }) {
   );
 }
 
-/* ----------------- tooltip ----------------- */
+/* ----------------- chart tooltip ----------------- */
 function CustomTooltip({ active, label, payload }) {
   if (!active || !payload?.length) return null;
 
@@ -449,11 +487,7 @@ export default function App() {
 
   /* ================= RESPONSIVE CHART SETTINGS ================= */
   const AXIS_COLOR = "#0b1b2a";
-
-  // Give ticks enough room, but not too much
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
-
-  // On mobile, hide axis LABEL text entirely to prevent overlap (ticks remain).
   const SHOW_AXIS_LABELS = !isMobile;
 
   const CHART_MARGIN = useMemo(
@@ -875,7 +909,7 @@ export default function App() {
           --pill:#ffffff;
           --shadow: 0 16px 40px rgba(0,0,0,0.25);
           --radius: 22px;
-          --ctrlH: 40px; /* a touch taller for mobile */
+          --ctrlH: 40px;
         }
         *{box-sizing:border-box}
         body{margin:0;background:var(--bg)}
@@ -951,7 +985,6 @@ export default function App() {
         .gsr-pillSelect{ text-align: center; text-align-last: center; }
         .gsr-pillSelect option{ text-align:left; }
 
-        /* ✅ DATE PILLS: widen segments + prevent clipping */
         .gsr-datePills{
           height: var(--ctrlH);
           width: 100%;
@@ -965,7 +998,7 @@ export default function App() {
           min-width: 0;
         }
         .gsr-dateSeg{
-          width: 46px;              /* was 40 */
+          width: 46px;
           height: calc(var(--ctrlH) - 10px);
           border: 0; outline: none;
           text-align:center; font-weight: 1000;
@@ -975,7 +1008,7 @@ export default function App() {
           line-height: 1;
           padding: 0;
         }
-        .gsr-dateYear{width: 88px;} /* was 70 */
+        .gsr-dateYear{width: 88px;}
         .gsr-dateSlash{color:#64748b; font-weight:1000;}
         .gsr-datePills--compact{ gap:6px; padding: 0 10px; }
         .is-compact .gsr-label{ font-size: 12px; }
@@ -1089,6 +1122,58 @@ export default function App() {
           align-items:center;
           justify-content:center;
         }
+
+        /* ✅ info tooltip styling */
+        .gsr-tipWrap{
+          position: relative;
+          display:inline-flex;
+          align-items:center;
+          margin-left: 6px;
+        }
+        .gsr-tipBtn{
+          width: 18px;
+          height: 18px;
+          border-radius: 999px;
+          border: 0;
+          background: rgba(11,27,42,0.12);
+          color: #0b1b2a;
+          font-weight: 1000;
+          font-size: 12px;
+          line-height: 18px;
+          text-align:center;
+          cursor: pointer;
+          padding: 0;
+          display:inline-flex;
+          align-items:center;
+          justify-content:center;
+          transform: translateY(-1px);
+        }
+        .gsr-tipBtn:active{ transform: translateY(0px) scale(0.98); }
+        .gsr-tipBubble{
+          position:absolute;
+          z-index: 50;
+          bottom: calc(100% + 10px);
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(255,255,255,0.98);
+          color: #0b1b2a;
+          border-radius: 12px;
+          box-shadow: 0 10px 25px rgba(0,0,0,0.22);
+          padding: 10px 12px;
+          width: min(260px, 74vw);
+          font-size: 13px;
+          font-weight: 900;
+          line-height: 1.25;
+        }
+        .gsr-tipBubble::after{
+          content:"";
+          position:absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          border: 8px solid transparent;
+          border-top-color: rgba(255,255,255,0.98);
+        }
       `}</style>
 
       <div className="gsr-container">
@@ -1157,11 +1242,17 @@ export default function App() {
               <div className="gsr-cardInner">
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
-                    <span className="gsr-muted">Change:</span>
+                    <span className="gsr-muted">
+                      Change:
+                      <InfoTip text="Sample tooltip: This shows how much the Gold-only strategy value changed (USD) from the start date to the end date." />
+                    </span>
                     <span className="gsr-strong">${fmt0(stats.gchg)}</span>
                   </div>
                   <div className="gsr-row">
-                    <span className="gsr-muted">Return:</span>
+                    <span className="gsr-muted">
+                      Return:
+                      <InfoTip text="Sample tooltip: Percentage return if you stayed fully in Gold over the selected period." />
+                    </span>
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
                   </div>
                 </div>
@@ -1174,11 +1265,17 @@ export default function App() {
               <div className="gsr-cardInner">
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
-                    <span className="gsr-muted">Change:</span>
+                    <span className="gsr-muted">
+                      Change:
+                      <InfoTip text="Sample tooltip: This shows how much the Silver-only strategy value changed (USD) from the start date to the end date." />
+                    </span>
                     <span className="gsr-strong">${fmt0(stats.schg)}</span>
                   </div>
                   <div className="gsr-row">
-                    <span className="gsr-muted">Return:</span>
+                    <span className="gsr-muted">
+                      Return:
+                      <InfoTip text="Sample tooltip: Percentage return if you stayed fully in Silver over the selected period." />
+                    </span>
                     <span className="gsr-strong">{fmt0(stats.spct)}%</span>
                   </div>
                 </div>
@@ -1192,27 +1289,48 @@ export default function App() {
 
             <div className="gsr-cardInner">
               <div className="gsr-portfolioGrid">
-                <div className="gsr-muted">Change:</div>
+                <div className="gsr-muted">
+                  Change:
+                  <InfoTip text="Sample tooltip: Your switching strategy total change and % return across the selected time period." />
+                </div>
                 <div className="right gsr-strong">
                   ${fmt0(stats.pchg)} | {fmt0(stats.ppct)}%
                 </div>
 
-                <div className="gsr-muted">Duration:</div>
+                <div className="gsr-muted">
+                  Duration:
+                  <InfoTip text="Sample tooltip: Total time between your chosen start date and end date (years + months)." />
+                </div>
                 <div className="right gsr-strong">{durationText}</div>
 
-                <div className="gsr-muted">Beats Gold (Time):</div>
+                <div className="gsr-muted">
+                  Beats Gold (Time):
+                  <InfoTip text="Sample tooltip: % of days where the strategy value is higher than staying in Gold." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsG)}%</div>
 
-                <div className="gsr-muted">Beats Silver (Time):</div>
+                <div className="gsr-muted">
+                  Beats Silver (Time):
+                  <InfoTip text="Sample tooltip: % of days where the strategy value is higher than staying in Silver." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsS)}%</div>
 
-                <div className="gsr-muted">vs Gold:</div>
+                <div className="gsr-muted">
+                  vs Gold:
+                  <InfoTip text="Sample tooltip: Strategy return minus Gold-only return (percentage points)." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPg)}%</div>
 
-                <div className="gsr-muted">vs Silver:</div>
+                <div className="gsr-muted">
+                  vs Silver:
+                  <InfoTip text="Sample tooltip: Strategy return minus Silver-only return (percentage points)." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPs)}%</div>
 
-                <div className="gsr-muted">Switches:</div>
+                <div className="gsr-muted">
+                  Switches:
+                  <InfoTip text="Sample tooltip: How many times the strategy switched between Gold and Silver based on your thresholds." />
+                </div>
                 <div className="right gsr-strong">
                   {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}
                 </div>
@@ -1343,7 +1461,7 @@ export default function App() {
                 {show.gold && (
                   <Line
                     name="Gold"
-                    yAxisId={axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis"}
+                    yAxisId={usdAxisId}
                     type="monotone"
                     dataKey="goldValue"
                     stroke="#f2c36b"
@@ -1357,7 +1475,7 @@ export default function App() {
                 {show.silver && (
                   <Line
                     name="Silver"
-                    yAxisId={axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis"}
+                    yAxisId={usdAxisId}
                     type="monotone"
                     dataKey="silverValue"
                     stroke="#0e2d4a"
@@ -1371,7 +1489,7 @@ export default function App() {
                 {show.strat && (
                   <Line
                     name="My Portfolio"
-                    yAxisId={axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis"}
+                    yAxisId={usdAxisId}
                     type="monotone"
                     dataKey="strat"
                     stroke="#a77d52"
@@ -1386,7 +1504,7 @@ export default function App() {
                 {show.gsr && (
                   <Line
                     name="GSR"
-                    yAxisId="leftAxis"
+                    yAxisId={gsrAxisId}
                     type="monotone"
                     dataKey="gsr"
                     stroke="#000000"
