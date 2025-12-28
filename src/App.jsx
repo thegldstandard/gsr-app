@@ -180,11 +180,13 @@ async function fetchLatestFromAPI() {
   }
 }
 
-/* ----------------- responsive hook ----------------- */
+/* ----------------- responsive hook (visualViewport-aware) ----------------- */
 function useBreakpoint() {
-  const get = () => {
+  const read = () => {
     const w = typeof window !== "undefined" ? window.innerWidth : 1200;
-    const h = typeof window !== "undefined" ? window.innerHeight : 800;
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    const h = vv?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800);
+
     return {
       w,
       h,
@@ -193,12 +195,36 @@ function useBreakpoint() {
       isLandscape: w > h,
     };
   };
-  const [bp, setBp] = useState(get);
+
+  const [bp, setBp] = useState(read);
 
   useEffect(() => {
-    const onResize = () => setBp(get());
-    window.addEventListener("resize", onResize, { passive: true });
-    return () => window.removeEventListener("resize", onResize);
+    const onAny = () => setBp(read());
+
+    window.addEventListener("resize", onAny, { passive: true });
+    window.addEventListener("orientationchange", onAny, { passive: true });
+
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener("resize", onAny, { passive: true });
+      vv.addEventListener("scroll", onAny, { passive: true });
+    } else {
+      window.addEventListener("scroll", onAny, { passive: true });
+    }
+
+    // initial sync (important on iOS)
+    onAny();
+
+    return () => {
+      window.removeEventListener("resize", onAny);
+      window.removeEventListener("orientationchange", onAny);
+      if (vv) {
+        vv.removeEventListener("resize", onAny);
+        vv.removeEventListener("scroll", onAny);
+      } else {
+        window.removeEventListener("scroll", onAny);
+      }
+    };
   }, []);
 
   return bp;
@@ -371,7 +397,7 @@ function diffYearsMonths(startDate, endDate) {
 
 /* ----------------- component ----------------- */
 export default function App() {
-  const { isMobile, isTablet, w, h, isLandscape } = useBreakpoint();
+  const { isMobile, isTablet, w, h } = useBreakpoint();
 
   const [rows, setRows] = useState([]);
   const [err, setErr] = useState("");
@@ -405,12 +431,10 @@ export default function App() {
     [isMobile]
   );
 
-  // ✅ landscape fill: phone landscape makes chart dominate the viewport height
+  // ✅ Uses visualViewport-aware height (h) so it stays correct after rotate + scroll
   const CHART_HEIGHT = useMemo(() => {
-    if (typeof window === "undefined") return 660;
-
-    const vh = window.innerHeight;
-    const vw = window.innerWidth;
+    const vh = h;
+    const vw = w;
     const landscape = vw > vh;
 
     if (isMobile && landscape) return Math.max(260, Math.min(560, Math.round(vh * 0.78)));
@@ -818,7 +842,7 @@ export default function App() {
         *{box-sizing:border-box}
         body{margin:0;background:var(--bg)}
         .gsr-page{
-          min-height:100vh;
+          min-height: 100dvh; /* ✅ dynamic viewport height */
           background:linear-gradient(180deg,#0f2d47 0%, #123a5a 55%, #123a5a 100%);
           padding: 22px 18px 34px;
           color:white;
