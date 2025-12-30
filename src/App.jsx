@@ -1203,7 +1203,7 @@ export default function App() {
                         id="gold_change"
                         activeId={activeTipId}
                         setActiveId={setActiveTipId}
-                        text="This shows how much the Gold-only strategy value changed (USD) from the start date to the end date."
+                        text="Change in value (USD) for the selected period."
                       />
                     </span>
                     <span className="gsr-strong">${fmt0(stats.gchg)}</span>
@@ -1215,7 +1215,7 @@ export default function App() {
                         id="gold_return"
                         activeId={activeTipId}
                         setActiveId={setActiveTipId}
-                        text="Percentage return if you stayed fully in Gold over the selected period."
+                        text="Percentage return for the selected period."
                       />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
@@ -1236,7 +1236,7 @@ export default function App() {
                         id="silver_change"
                         activeId={activeTipId}
                         setActiveId={setActiveTipId}
-                        text="This shows how much the Silver-only strategy value changed (USD) from the start date to the end date."
+                        text="Change in value (USD) for the selected period."
                       />
                     </span>
                     <span className="gsr-strong">${fmt0(stats.schg)}</span>
@@ -1248,7 +1248,7 @@ export default function App() {
                         id="silver_return"
                         activeId={activeTipId}
                         setActiveId={setActiveTipId}
-                        text="Percentage return if you stayed fully in Silver over the selected period."
+                        text="Percentage return for the selected period."
                       />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.spct)}%</span>
@@ -1270,7 +1270,7 @@ export default function App() {
                     id="p_change"
                     activeId={activeTipId}
                     setActiveId={setActiveTipId}
-                    text="Your switching strategy total change and percentage return across the selected time period."
+                    text="Change in value (USD) and percentage return for the selected period."
                   />
                 </div>
                 <div className="right gsr-strong">
@@ -1316,7 +1316,7 @@ export default function App() {
                     id="p_vs_g"
                     activeId={activeTipId}
                     setActiveId={setActiveTipId}
-                    text="Strategy return minus Gold-only return (percentage points)."
+                    text="My Portfolio return minus Gold-only return (percentage points)."
                   />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPg)}%</div>
@@ -1327,7 +1327,7 @@ export default function App() {
                     id="p_vs_s"
                     activeId={activeTipId}
                     setActiveId={setActiveTipId}
-                    text="Strategy return minus Silver-only return (percentage points)."
+                    text="My Portfolio return minus Silver-only return (percentage points)."
                   />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPs)}%</div>
@@ -1338,7 +1338,7 @@ export default function App() {
                     id="p_switches"
                     activeId={activeTipId}
                     setActiveId={setActiveTipId}
-                    text="How many times the strategy switched between Gold and Silver based on your thresholds."
+                    text="Number of switches between Gold and Silver based on your thresholds."
                   />
                 </div>
                 <div className="right gsr-strong">
