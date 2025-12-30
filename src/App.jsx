@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState, useRef } from "react";
 import Papa from "papaparse";
 import {
   ResponsiveContainer,
@@ -94,6 +94,7 @@ function niceTicks(min, max, target = 7) {
   return { domain: [niceMin, niceMax], ticks };
 }
 
+// adds headroom
 function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
   if (!Number.isFinite(min) || !Number.isFinite(max))
     return { domain: ["auto", "auto"], ticks: undefined };
@@ -115,19 +116,12 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
   return niceTicks(paddedMin, paddedMax, target);
 }
 
-/* ---- CSV-first; API only to top-up the latest day (>=1990) ---- */
+/* ---- CSV-first; API only to top-up the latest day ---- */
 async function fetchCSVText() {
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
-
-  const candidates = [
-    "prices.csv",
-    "data/prices.csv",
-    `${base}prices.csv`,
-    `${base}data/prices.csv`,
-  ];
+  const candidates = ["prices.csv", "data/prices.csv", `${base}prices.csv`, `${base}data/prices.csv`];
 
   let lastErr = null;
-
   for (const url of candidates) {
     try {
       const res = await fetch(url, { cache: "no-store" });
@@ -155,8 +149,7 @@ async function fetchCSVText() {
 
 async function fetchLatestFromAPI() {
   try {
-    const key =
-      import.meta?.env?.VITE_METAL_API_KEY || "98ce31de34ecaadcd00d49d12137a56a";
+    const key = import.meta?.env?.VITE_METAL_API_KEY || "98ce31de34ecaadcd00d49d12137a56a";
     const url = `https://api.metalpriceapi.com/v1/latest?api_key=${key}&base=USD&currencies=XAU,XAG`;
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`API HTTP ${res.status}`);
@@ -170,25 +163,21 @@ async function fetchLatestFromAPI() {
 
     const today = new Date();
     const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    return {
-      ok: true,
-      row: { date: todayLocal, gold: goldUSD, silver: silverUSD, gsr: goldUSD / silverUSD },
-    };
+    return { ok: true, row: { date: todayLocal, gold: goldUSD, silver: silverUSD, gsr: goldUSD / silverUSD } };
   } catch (e) {
     console.warn("MetalPriceAPI latest failed:", e);
     return { ok: false, error: String(e?.message || e) };
   }
 }
 
-/* ----------------- bulletproof breakpoint hook ----------------- */
-function useBreakpoint() {
+/* ----------------- mobile sizing hook ----------------- */
+function useViewportMetrics() {
   const read = () => {
-    const w = typeof window !== "undefined" ? window.innerWidth : 1200;
+    const w = typeof window !== "undefined" ? Math.round(window.innerWidth) : 1200;
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
     const h = Math.round(vv?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800));
-
     return {
-      w: Math.round(w),
+      w,
       h,
       isMobile: w <= 640,
       isTablet: w > 640 && w <= 1024,
@@ -196,43 +185,38 @@ function useBreakpoint() {
     };
   };
 
-  const [bp, setBp] = useState(read);
+  const [m, setM] = useState(read);
 
   useEffect(() => {
     let rafId = 0;
+    let until = 0;
     let last = read();
-    let pollUntil = 0;
 
-    const applyIfChanged = () => {
+    const apply = () => {
       const next = read();
       if (next.w !== last.w || next.h !== last.h || next.isLandscape !== last.isLandscape) {
         last = next;
-        setBp(next);
+        setM(next);
       }
     };
 
-    const pollLoop = () => {
-      applyIfChanged();
-      if (performance.now() < pollUntil) {
-        rafId = requestAnimationFrame(pollLoop);
-      } else {
-        rafId = 0;
-      }
+    const loop = () => {
+      apply();
+      if (performance.now() < until) rafId = requestAnimationFrame(loop);
+      else rafId = 0;
     };
 
-    const startShortPoll = (ms = 900) => {
-      pollUntil = performance.now() + ms;
-      if (!rafId) rafId = requestAnimationFrame(pollLoop);
+    const shortPoll = (ms = 900) => {
+      until = performance.now() + ms;
+      if (!rafId) rafId = requestAnimationFrame(loop);
     };
 
     const onResize = () => {
-      applyIfChanged();
-      startShortPoll(900);
+      apply();
+      shortPoll(1000);
     };
 
-    const onScroll = () => {
-      startShortPoll(1200);
-    };
+    const onScroll = () => shortPoll(1200);
 
     window.addEventListener("resize", onResize, { passive: true });
     window.addEventListener("orientationchange", onResize, { passive: true });
@@ -245,12 +229,12 @@ function useBreakpoint() {
     }
 
     const onVis = () => {
-      if (document.visibilityState === "visible") startShortPoll(1200);
+      if (document.visibilityState === "visible") shortPoll(1200);
     };
     document.addEventListener("visibilitychange", onVis);
 
-    applyIfChanged();
-    startShortPoll(600);
+    apply();
+    shortPoll(600);
 
     return () => {
       window.removeEventListener("resize", onResize);
@@ -265,30 +249,22 @@ function useBreakpoint() {
     };
   }, []);
 
-  return bp;
+  return m;
 }
 
-/* ----------------- globally exclusive tooltip ----------------- */
+/* ----------------- tooltips (exclusive open) ----------------- */
 function InfoTip({ id, activeId, setActiveId, text }) {
   const open = activeId === id;
-  const isTouchRef = React.useRef(false);
-
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.key === "Escape") setActiveId(null);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [setActiveId]);
+  const touchedRef = useRef(false);
 
   return (
     <span
       className="gsr-tipWrap"
       onMouseEnter={() => {
-        if (!isTouchRef.current) setActiveId(id);
+        if (!touchedRef.current) setActiveId(id);
       }}
       onMouseLeave={() => {
-        if (!isTouchRef.current) setActiveId(null);
+        if (!touchedRef.current) setActiveId(null);
       }}
     >
       <button
@@ -296,11 +272,12 @@ function InfoTip({ id, activeId, setActiveId, text }) {
         className="gsr-tipBtn"
         aria-label="Info"
         aria-expanded={open}
-        onPointerDown={() => {
-          isTouchRef.current = true;
+        onPointerDown={(e) => {
+          touchedRef.current = true;
+          e.stopPropagation(); // prevent global close
         }}
         onClick={(e) => {
-          e.stopPropagation();
+          e.stopPropagation(); // prevent global close
           setActiveId((cur) => (cur === id ? null : id));
         }}
       >
@@ -395,14 +372,7 @@ function CurrencyInput({ value, onChange, className = "" }) {
     setTxt(n.toLocaleString("en-GB"));
   };
 
-  return (
-    <input
-      className={`gsr-pill ${className}`}
-      inputMode="numeric"
-      value={txt}
-      onChange={handleChange}
-    />
-  );
+  return <input className={`gsr-pill ${className}`} inputMode="numeric" value={txt} onChange={handleChange} />;
 }
 
 /* ----------------- chart tooltip ----------------- */
@@ -449,15 +419,7 @@ function CustomTooltip({ active, label, payload }) {
         {rows.map((r) => (
           <div key={r.name} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 900 }}>
-              <span
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: 999,
-                  background: r.color,
-                  display: "inline-block",
-                }}
-              />
+              <span style={{ width: 10, height: 10, borderRadius: 999, background: r.color, display: "inline-block" }} />
               <span>{r.name}</span>
             </div>
             <div style={{ fontWeight: 1000 }}>{r.value}</div>
@@ -468,6 +430,7 @@ function CustomTooltip({ active, label, payload }) {
   );
 }
 
+/* -------- duration between 2 dates (years + months) -------- */
 function diffYearsMonths(startDate, endDate) {
   if (!startDate || !endDate) return { years: 0, months: 0 };
   let months =
@@ -480,11 +443,11 @@ function diffYearsMonths(startDate, endDate) {
 
 /* ----------------- component ----------------- */
 export default function App() {
-  const { isMobile, isTablet, w, h } = useBreakpoint();
+  const { isMobile, isTablet, w, h } = useViewportMetrics();
 
-  // ✅ only one tooltip open globally
   const [activeTipId, setActiveTipId] = useState(null);
 
+  // ✅ click anywhere else closes current tooltip
   useEffect(() => {
     const close = () => setActiveTipId(null);
     document.addEventListener("pointerdown", close);
@@ -504,9 +467,15 @@ export default function App() {
   const [s2g, setS2G] = useState(65);
   const [startMetal, setStartMetal] = useState("silver");
 
+  /* ================= MANUAL AXIS SETTINGS ================= */
   const AXIS_COLOR = "#0b1b2a";
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
   const SHOW_AXIS_LABELS = !isMobile;
+
+  const CHART_MARGIN = useMemo(() => {
+    if (isMobile) return { top: 18, right: 8, left: 8, bottom: 18 };
+    return { top: 20, right: 15, left: 15, bottom: 22 };
+  }, [isMobile]);
 
   const CHART_HEIGHT = useMemo(() => {
     const vh = h;
@@ -519,6 +488,8 @@ export default function App() {
     return 660;
   }, [isMobile, isTablet, w, h]);
 
+  /* ==================================================================== */
+
   useEffect(() => {
     (async () => {
       try {
@@ -527,12 +498,7 @@ export default function App() {
         const header = lines.find((l) => l.trim().length > 0) || "";
         const pref = header.includes("\t") ? "\t" : header.includes(";") ? ";" : ",";
 
-        let parsed = Papa.parse(text, {
-          header: true,
-          skipEmptyLines: true,
-          delimiter: "",
-          newline: "",
-        });
+        let parsed = Papa.parse(text, { header: true, skipEmptyLines: true, delimiter: "", newline: "" });
 
         let mapped = (parsed.data || [])
           .map((o) => {
@@ -861,6 +827,15 @@ export default function App() {
   const leftIsRatio = axisMode === "MIXED" || axisMode === "RATIO_BOTH";
   const rightIsRatio = axisMode === "RATIO_BOTH";
 
+  const leftDomain = leftIsRatio ? ratioDomain : usdDomain;
+  const leftTicks = leftIsRatio ? ratioTicks : usdTicks;
+
+  const rightDomain = rightIsRatio ? ratioDomain : usdDomain;
+  const rightTicks = rightIsRatio ? ratioTicks : usdTicks;
+
+  const leftLabel = hideAxisText ? "" : leftIsRatio ? "Ratio" : "Value (USD)";
+  const rightLabel = hideAxisText ? "" : rightIsRatio ? "Ratio" : "Value (USD)";
+
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
   const gsrAxisId = "leftAxis";
 
@@ -875,18 +850,22 @@ export default function App() {
     return JSON.stringify({
       axisMode,
       show,
+      leftDomain,
+      leftTicks,
+      rightDomain,
+      rightTicks,
       usdAxisId,
     });
-  }, [axisMode, show, usdAxisId]);
+  }, [axisMode, show, leftDomain, leftTicks, rightDomain, rightTicks, usdAxisId]);
 
   const chartRemountKey = useMemo(() => {
     return JSON.stringify({
-      chartH: CHART_HEIGHT,
       w,
-      vh: h,
+      h,
+      chartH: CHART_HEIGHT,
       axisKeyPart,
     });
-  }, [CHART_HEIGHT, w, h, axisKeyPart]);
+  }, [w, h, CHART_HEIGHT, axisKeyPart]);
 
   const yTickFont = isMobile ? 11 : 13;
   const xTickFont = isMobile ? 11 : 12;
@@ -1105,9 +1084,7 @@ export default function App() {
           white-space:nowrap;
           font-size: 14px;
         }
-        .gsr-dot{
-          width: 11px; height: 11px; border-radius: 999px; display:inline-block;
-        }
+        .gsr-dot{ width: 11px; height: 11px; border-radius: 999px; display:inline-block; }
         .gsr-chartInner{
           width: 100%;
           height: ${CHART_HEIGHT}px;
@@ -1117,35 +1094,18 @@ export default function App() {
           justify-content:center;
         }
 
-        /* ✅ tooltips (exclusive open) */
-        .gsr-tipWrap{
-          position: relative;
-          display:inline-flex;
-          align-items:center;
-          margin-left: 6px;
-        }
+        /* ✅ tooltip styling */
+        .gsr-tipWrap{ position: relative; display:inline-flex; align-items:center; margin-left: 6px; }
         .gsr-tipBtn{
-          width: 18px;
-          height: 18px;
-          border-radius: 999px;
-          border: 0;
-          background: rgba(11,27,42,0.12);
-          color: #0b1b2a;
-          font-weight: 1000;
-          font-size: 12px;
-          line-height: 18px;
-          text-align:center;
-          cursor: pointer;
-          padding: 0;
-          display:inline-flex;
-          align-items:center;
-          justify-content:center;
+          width: 18px; height: 18px; border-radius: 999px; border: 0;
+          background: rgba(11,27,42,0.12); color: #0b1b2a;
+          font-weight: 1000; font-size: 12px; line-height: 18px; text-align:center;
+          cursor: pointer; padding: 0; display:inline-flex; align-items:center; justify-content:center;
           transform: translateY(-1px);
         }
         .gsr-tipBtn:active{ transform: translateY(0px) scale(0.98); }
         .gsr-tipBubble{
-          position:absolute;
-          z-index: 50;
+          position:absolute; z-index: 50;
           bottom: calc(100% + 10px);
           left: 50%;
           transform: translateX(-50%);
@@ -1158,7 +1118,7 @@ export default function App() {
           font-size: 13px;
           font-weight: 900;
           line-height: 1.25;
-          pointer-events: none;
+          pointer-events: none; /* prevents flicker + weird hover */
         }
         .gsr-tipBubble::after{
           content:"";
@@ -1177,8 +1137,59 @@ export default function App() {
           <div className="gsr-title-underline" />
         </header>
 
+        {/* controls */}
+        <section className="gsr-controls">
+          <div className="gsr-control">
+            <span className="gsr-label">Initial Amount (USD)</span>
+            <CurrencyInput value={amount} onChange={setAmount} />
+          </div>
+
+          <DatePills label="Start Date (DD/MM/YYYY)" valueIso={startIso} onChangeIso={setStartIso} compact />
+
+          <div className="gsr-control">
+            <span className="gsr-label">Ratio on Start Date</span>
+            <div className="gsr-pillReadOnly gsr-pill--small">{startRatio != null ? fmt0(startRatio) : "—"}</div>
+          </div>
+
+          <DatePills label="End Date (DD/MM/YYYY)" valueIso={endIso} onChangeIso={setEndIso} compact />
+
+          <div className="gsr-control">
+            <span className="gsr-label">Start Metal</span>
+            <select
+              className="gsr-pill gsr-pillSelect gsr-pill--small"
+              value={startMetal}
+              onChange={(e) => setStartMetal(e.target.value)}
+            >
+              <option value="gold">Gold</option>
+              <option value="silver">Silver</option>
+            </select>
+          </div>
+
+          <div className="gsr-control">
+            <span className="gsr-label">Silver → Gold</span>
+            <input
+              className="gsr-pill gsr-pill--small"
+              type="number"
+              step="1"
+              value={s2g}
+              onChange={(e) => setS2G(Number(e.target.value) || 0)}
+            />
+          </div>
+
+          <div className="gsr-control">
+            <span className="gsr-label">Gold → Silver</span>
+            <input
+              className="gsr-pill gsr-pill--small"
+              type="number"
+              step="1"
+              value={g2s}
+              onChange={(e) => setG2S(Number(e.target.value) || 0)}
+            />
+          </div>
+        </section>
+
         {/* cards */}
-        <section className="gsr-cards" onPointerDown={(e) => e.stopPropagation()}>
+        <section className="gsr-cards">
           <div className="gsr-leftStack">
             <div className="gsr-card">
               <div className="gsr-cardTitle">Gold</div>
@@ -1338,8 +1349,229 @@ export default function App() {
           </div>
         </section>
 
-        {/* NOTE: Everything else in your file (controls + chart) stays exactly as in your current working version.
-           If you already have the full file locally, you can safely just update these tooltip text strings instead. */}
+        {err && <p className="gsr-error">Error: {err}</p>}
+
+        {/* chart */}
+        <div className="gsr-chartWrap">
+          <div className="gsr-chartTop">
+            <label className="gsr-toggle">
+              <input
+                type="checkbox"
+                checked={show.gold}
+                onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))}
+              />
+              <span className="gsr-dot" style={{ background: "#f2c36b" }} />
+              Gold
+            </label>
+            <label className="gsr-toggle">
+              <input
+                type="checkbox"
+                checked={show.silver}
+                onChange={(e) => setShow((s) => ({ ...s, silver: e.target.checked }))}
+              />
+              <span className="gsr-dot" style={{ background: "#0e2d4a" }} />
+              Silver
+            </label>
+            <label className="gsr-toggle">
+              <input
+                type="checkbox"
+                checked={show.strat}
+                onChange={(e) => setShow((s) => ({ ...s, strat: e.target.checked }))}
+              />
+              <span className="gsr-dot" style={{ background: "#a77d52" }} />
+              My Portfolio
+            </label>
+            <label className="gsr-toggle">
+              <input
+                type="checkbox"
+                checked={show.gsr}
+                onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))}
+              />
+              <span className="gsr-dot" style={{ background: "#000000" }} />
+              GSR
+            </label>
+          </div>
+
+          <div className="gsr-chartInner">
+            <ResponsiveContainer width="100%" height="100%" debounce={0} key={chartRemountKey}>
+              <LineChart data={data} margin={CHART_MARGIN}>
+                <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.1} />
+
+                <XAxis
+                  dataKey="date"
+                  tickFormatter={(d) =>
+                    d instanceof Date ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" }) : d
+                  }
+                  minTickGap={18}
+                  tickMargin={10}
+                  padding={{ left: 6, right: 6 }}
+                  tick={{ fontSize: xTickFont, fontWeight: 900 }}
+                />
+
+                <YAxis
+                  key={`leftAxis__${axisKeyPart}`}
+                  yAxisId="leftAxis"
+                  orientation="left"
+                  type="number"
+                  scale="linear"
+                  allowDataOverflow={false}
+                  axisLine={{ stroke: AXIS_COLOR }}
+                  tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tickMargin={yTickMargin}
+                  width={AXIS_WIDTH}
+                  domain={leftDomain}
+                  ticks={leftTicks}
+                  tickFormatter={(v) => fmt0(Number(v))}
+                  label={
+                    hideAxisText || !SHOW_AXIS_LABELS
+                      ? undefined
+                      : {
+                          value: leftLabel,
+                          angle: -90,
+                          position: "insideLeft",
+                          offset: 0,
+                          dy: 0,
+                          fill: AXIS_COLOR,
+                          fontWeight: 900,
+                        }
+                  }
+                />
+
+                <YAxis
+                  key={`rightAxis__${axisKeyPart}`}
+                  yAxisId="rightAxis"
+                  orientation="right"
+                  type="number"
+                  scale="linear"
+                  allowDataOverflow={false}
+                  axisLine={{ stroke: AXIS_COLOR }}
+                  tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tickMargin={yTickMargin}
+                  width={AXIS_WIDTH}
+                  domain={rightDomain}
+                  ticks={rightTicks}
+                  tickFormatter={(v) => fmt0(Number(v))}
+                  label={
+                    hideAxisText || !SHOW_AXIS_LABELS
+                      ? undefined
+                      : {
+                          value: rightLabel,
+                          angle: 90,
+                          position: "insideRight",
+                          offset: 0,
+                          dy: 0,
+                          fill: AXIS_COLOR,
+                          fontWeight: 900,
+                        }
+                  }
+                />
+
+                <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
+
+                {show.gold && (
+                  <Line
+                    name="Gold"
+                    yAxisId={usdAxisId}
+                    type="monotone"
+                    dataKey="goldValue"
+                    stroke="#f2c36b"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
+                {show.silver && (
+                  <Line
+                    name="Silver"
+                    yAxisId={usdAxisId}
+                    type="monotone"
+                    dataKey="silverValue"
+                    stroke="#0e2d4a"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
+                {show.strat && (
+                  <Line
+                    name="My Portfolio"
+                    yAxisId={usdAxisId}
+                    type="monotone"
+                    dataKey="strat"
+                    stroke="#a77d52"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
+
+                {show.gsr && (
+                  <Line
+                    name="GSR"
+                    yAxisId={gsrAxisId}
+                    type="monotone"
+                    dataKey="gsr"
+                    stroke="#000000"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
+
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
+                  <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />
+                )}
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(s2g) && (
+                  <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />
+                )}
+
+                {axisMode === "USD_BOTH" && (
+                  <Line
+                    name="__axis_helper__usd_left__"
+                    yAxisId="leftAxis"
+                    dataKey={usdHelperKey}
+                    type="monotone"
+                    stroke="transparent"
+                    strokeWidth={1}
+                    dot={false}
+                    activeDot={false}
+                    legendType="none"
+                    tooltipType="none"
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
+
+                {axisMode === "RATIO_BOTH" && show.gsr && (
+                  <Line
+                    name="__axis_helper__ratio_right__"
+                    yAxisId="rightAxis"
+                    dataKey="gsr"
+                    type="monotone"
+                    stroke="transparent"
+                    strokeWidth={1}
+                    dot={false}
+                    activeDot={false}
+                    legendType="none"
+                    tooltipType="none"
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
       </div>
     </div>
   );
