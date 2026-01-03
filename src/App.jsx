@@ -1519,7 +1519,7 @@ export default function App() {
                     yAxisId={gsrAxisId}
                     type="monotone"
                     dataKey="gsr"
-                    stroke="#000000"
+                    stroke="#960019"
                     strokeWidth={2}
                     dot={false}
                     activeDot={{ r: 4 }}
