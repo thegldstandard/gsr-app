@@ -1387,7 +1387,7 @@ export default function App() {
                 checked={show.gsr}
                 onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))}
               />
-              <span className="gsr-dot" style={{ background: "#000000" }} />
+              <span className="gsr-dot" style={{ background: "#960019" }} />
               GSR
             </label>
           </div>
@@ -1522,7 +1522,7 @@ export default function App() {
                     stroke="#960019"
                     strokeWidth={2}
                     dot={false}
-                    activeDot={{ r: 4 }}
+                    activeDot={{ r: 4, fill: "#960019" }}
                     connectNulls
                     isAnimationActive={false}
                   />
