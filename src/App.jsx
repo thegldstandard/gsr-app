@@ -67,6 +67,16 @@ const clampInt = (n, min, max) => {
   return Math.min(max, Math.max(min, Math.trunc(x)));
 };
 
+const parseIntOrNull = (s) => {
+  if (s == null) return null;
+  const raw = String(s).trim();
+  if (!raw) return null;
+  const digits = raw.replace(/[^\d]/g, "");
+  if (!digits) return null;
+  const n = parseInt(digits, 10);
+  return Number.isFinite(n) ? n : null;
+};
+
 function niceTicks(min, max, target = 7) {
   if (!Number.isFinite(min) || !Number.isFinite(max))
     return { domain: ["auto", "auto"], ticks: undefined };
@@ -94,7 +104,6 @@ function niceTicks(min, max, target = 7) {
   return { domain: [niceMin, niceMax], ticks };
 }
 
-// adds headroom
 function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
   if (!Number.isFinite(min) || !Number.isFinite(max))
     return { domain: ["auto", "auto"], ticks: undefined };
@@ -274,10 +283,10 @@ function InfoTip({ id, activeId, setActiveId, text }) {
         aria-expanded={open}
         onPointerDown={(e) => {
           touchedRef.current = true;
-          e.stopPropagation(); // prevent global close
+          e.stopPropagation();
         }}
         onClick={(e) => {
-          e.stopPropagation(); // prevent global close
+          e.stopPropagation();
           setActiveId((cur) => (cur === id ? null : id));
         }}
       >
@@ -375,6 +384,68 @@ function CurrencyInput({ value, onChange, className = "" }) {
   return <input className={`gsr-pill ${className}`} inputMode="numeric" value={txt} onChange={handleChange} />;
 }
 
+/* ----------------- Ratio input: centered text + right-side arrows on mobile ----------------- */
+function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 999, step = 1 }) {
+  const sanitize = (raw) => raw.replace(/[^\d]/g, "").slice(0, 4);
+
+  const commitClamp = () => {
+    if (!valueText) return; // keep blank
+    const n = parseIntOrNull(valueText);
+    if (n == null) return;
+    const clamped = clampInt(n, min, max);
+    onChangeText(String(clamped));
+  };
+
+  const nNow = parseIntOrNull(valueText);
+
+  const bump = (dir) => {
+    const base = nNow == null ? 0 : nNow;
+    const next = clampInt(base + dir * step, min, max);
+    onChangeText(String(next));
+  };
+
+  return (
+    <div className="gsr-control">
+      <span className="gsr-label">{label}</span>
+
+      <div className={`gsr-stepper ${isMobile ? "is-mobile" : ""}`}>
+        <input
+          className="gsr-pill gsr-pill--small gsr-stepperInput"
+          type="number"            /* desktop spinners still work */
+          inputMode="numeric"
+          step={step}
+          value={valueText}        /* allows "" */
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "") {
+              onChangeText("");
+              return;
+            }
+            onChangeText(sanitize(raw));
+          }}
+          onBlur={commitClamp}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+              commitClamp();
+            }
+          }}
+        />
+
+        {/* mobile-only overlay on the RIGHT */}
+        <div className="gsr-stepperBtns" aria-hidden={!isMobile}>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)} tabIndex={isMobile ? 0 : -1}>
+            ▲
+          </button>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(-1)} tabIndex={isMobile ? 0 : -1}>
+            ▼
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ----------------- chart tooltip ----------------- */
 function CustomTooltip({ active, label, payload }) {
   if (!active || !payload?.length) return null;
@@ -447,7 +518,6 @@ export default function App() {
 
   const [activeTipId, setActiveTipId] = useState(null);
 
-  // ✅ click anywhere else closes current tooltip
   useEffect(() => {
     const close = () => setActiveTipId(null);
     document.addEventListener("pointerdown", close);
@@ -463,11 +533,20 @@ export default function App() {
   const [startIso, setStartIso] = useState("");
   const [endIso, setEndIso] = useState("");
 
-  const [g2s, setG2S] = useState(85);
-  const [s2g, setS2G] = useState(65);
+  const [g2sText, setG2SText] = useState("85");
+  const [s2gText, setS2GText] = useState("65");
   const [startMetal, setStartMetal] = useState("silver");
 
-  /* ================= MANUAL AXIS SETTINGS ================= */
+  const g2s = useMemo(() => {
+    const n = parseIntOrNull(g2sText);
+    return n == null ? null : clampInt(n, 0, 999);
+  }, [g2sText]);
+
+  const s2g = useMemo(() => {
+    const n = parseIntOrNull(s2gText);
+    return n == null ? null : clampInt(n, 0, 999);
+  }, [s2gText]);
+
   const AXIS_COLOR = "#0b1b2a";
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
   const SHOW_AXIS_LABELS = !isMobile;
@@ -487,8 +566,6 @@ export default function App() {
     if (isTablet) return 520;
     return 660;
   }, [isMobile, isTablet, w, h]);
-
-  /* ==================================================================== */
 
   useEffect(() => {
     (async () => {
@@ -640,6 +717,7 @@ export default function App() {
     const out = valuedRows.map((r, idx) => {
       if (idx > 0) {
         const prev = valuedRows[idx - 1];
+
         const up = Number.isFinite(g2s) && prev.gsr < g2s && r.gsr >= g2s;
         const down = Number.isFinite(s2g) && prev.gsr > s2g && r.gsr <= s2g;
 
@@ -933,7 +1011,7 @@ export default function App() {
           outline: none;
           font-weight: 900;
           min-width: 0;
-          text-align: center;
+          text-align: center; /* ✅ keep number centered */
           line-height: var(--ctrlH);
           font-size: 16px;
         }
@@ -985,6 +1063,49 @@ export default function App() {
         .gsr-dateSlash{color:#64748b; font-weight:1000;}
         .gsr-datePills--compact{ gap:6px; padding: 0 10px; }
         .is-compact .gsr-label{ font-size: 12px; }
+
+        /* ====== Stepper: arrows pinned on right, number stays centered ====== */
+        .gsr-stepper{ position: relative; width: 100%; }
+        /* remove the old padding-right trick so center is true center */
+        .gsr-stepperInput{ padding-right: 14px; }
+
+        .gsr-stepperBtns{
+          position:absolute;
+          right: 10px;
+          top: 50%;
+          transform: translateY(-50%);
+          display: none;
+          flex-direction: column;
+          gap: 4px;
+          z-index: 2;
+        }
+
+        .gsr-stepBtn{
+          width: 26px;
+          height: 16px;
+          border-radius: 10px;
+          border: 0;
+          background: rgba(11,27,42,0.10);
+          color: #0b1b2a;
+          font-weight: 1000;
+          font-size: 11px;
+          line-height: 16px;
+          cursor: pointer;
+          padding: 0;
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          user-select:none;
+        }
+        .gsr-stepBtn:active{ transform: scale(0.98); }
+
+        .gsr-stepper.is-mobile .gsr-stepperBtns{ display:flex; }
+
+        /* make sure buttons don't block text selection/cursor too much */
+        .gsr-stepper.is-mobile .gsr-stepperInput{
+          padding-right: 14px; /* keep same so text center doesn't shift */
+        }
+        /* ================================================================ */
 
         @media (max-width: 420px){
           .gsr-dateSeg{ width: 42px; font-size: 15px; }
@@ -1094,7 +1215,6 @@ export default function App() {
           justify-content:center;
         }
 
-        /* ✅ tooltip styling */
         .gsr-tipWrap{ position: relative; display:inline-flex; align-items:center; margin-left: 6px; }
         .gsr-tipBtn{
           width: 18px; height: 18px; border-radius: 999px; border: 0;
@@ -1118,7 +1238,7 @@ export default function App() {
           font-size: 13px;
           font-weight: 900;
           line-height: 1.25;
-          pointer-events: none; /* prevents flicker + weird hover */
+          pointer-events: none;
         }
         .gsr-tipBubble::after{
           content:"";
@@ -1137,7 +1257,6 @@ export default function App() {
           <div className="gsr-title-underline" />
         </header>
 
-        {/* controls */}
         <section className="gsr-controls">
           <div className="gsr-control">
             <span className="gsr-label">Initial Amount (USD)</span>
@@ -1165,27 +1284,8 @@ export default function App() {
             </select>
           </div>
 
-          <div className="gsr-control">
-            <span className="gsr-label">Silver → Gold</span>
-            <input
-              className="gsr-pill gsr-pill--small"
-              type="number"
-              step="1"
-              value={s2g}
-              onChange={(e) => setS2G(Number(e.target.value) || 0)}
-            />
-          </div>
-
-          <div className="gsr-control">
-            <span className="gsr-label">Gold → Silver</span>
-            <input
-              className="gsr-pill gsr-pill--small"
-              type="number"
-              step="1"
-              value={g2s}
-              onChange={(e) => setG2S(Number(e.target.value) || 0)}
-            />
-          </div>
+          <RatioInput label="Silver → Gold" valueText={s2gText} onChangeText={setS2GText} isMobile={isMobile} />
+          <RatioInput label="Gold → Silver" valueText={g2sText} onChangeText={setG2SText} isMobile={isMobile} />
         </section>
 
         {/* cards */}
@@ -1202,7 +1302,7 @@ export default function App() {
                       <InfoTip
                         id="gold_change"
                         activeId={activeTipId}
-                        setActiveId={setActiveTipId}
+                        setActiveTipId={setActiveTipId}
                         text="Change in value (USD) for the selected period."
                       />
                     </span>
@@ -1214,7 +1314,7 @@ export default function App() {
                       <InfoTip
                         id="gold_return"
                         activeId={activeTipId}
-                        setActiveId={setActiveTipId}
+                        setActiveTipId={setActiveTipId}
                         text="Percentage return for the selected period."
                       />
                     </span>
@@ -1235,7 +1335,7 @@ export default function App() {
                       <InfoTip
                         id="silver_change"
                         activeId={activeTipId}
-                        setActiveId={setActiveTipId}
+                        setActiveTipId={setActiveTipId}
                         text="Change in value (USD) for the selected period."
                       />
                     </span>
@@ -1247,7 +1347,7 @@ export default function App() {
                       <InfoTip
                         id="silver_return"
                         activeId={activeTipId}
-                        setActiveId={setActiveTipId}
+                        setActiveTipId={setActiveTipId}
                         text="Percentage return for the selected period."
                       />
                     </span>
@@ -1269,7 +1369,7 @@ export default function App() {
                   <InfoTip
                     id="p_change"
                     activeId={activeTipId}
-                    setActiveId={setActiveTipId}
+                    setActiveTipId={setActiveTipId}
                     text="Change in value (USD) and percentage return for the selected period."
                   />
                 </div>
@@ -1282,7 +1382,7 @@ export default function App() {
                   <InfoTip
                     id="p_duration"
                     activeId={activeTipId}
-                    setActiveId={setActiveTipId}
+                    setActiveTipId={setActiveTipId}
                     text="Total time between your chosen start date and end date (years and months)."
                   />
                 </div>
@@ -1293,7 +1393,7 @@ export default function App() {
                   <InfoTip
                     id="p_beats_g"
                     activeId={activeTipId}
-                    setActiveId={setActiveTipId}
+                    setActiveTipId={setActiveTipId}
                     text="Percentage of days where My Portfolio value is higher than staying in Gold."
                   />
                 </div>
@@ -1304,7 +1404,7 @@ export default function App() {
                   <InfoTip
                     id="p_beats_s"
                     activeId={activeTipId}
-                    setActiveId={setActiveTipId}
+                    setActiveTipId={setActiveTipId}
                     text="Percentage of days where My Portfolio value is higher than staying in Silver."
                   />
                 </div>
@@ -1315,7 +1415,7 @@ export default function App() {
                   <InfoTip
                     id="p_vs_g"
                     activeId={activeTipId}
-                    setActiveId={setActiveTipId}
+                    setActiveTipId={setActiveTipId}
                     text="My Portfolio return minus Gold-only return (percentage points)."
                   />
                 </div>
@@ -1326,7 +1426,7 @@ export default function App() {
                   <InfoTip
                     id="p_vs_s"
                     activeId={activeTipId}
-                    setActiveId={setActiveTipId}
+                    setActiveTipId={setActiveTipId}
                     text="My Portfolio return minus Silver-only return (percentage points)."
                   />
                 </div>
@@ -1337,7 +1437,7 @@ export default function App() {
                   <InfoTip
                     id="p_switches"
                     activeId={activeTipId}
-                    setActiveId={setActiveTipId}
+                    setActiveTipId={setActiveTipId}
                     text="Number of switches between Gold and Silver based on your thresholds."
                   />
                 </div>
@@ -1396,7 +1496,6 @@ export default function App() {
             <ResponsiveContainer width="100%" height="100%" debounce={0} key={chartRemountKey}>
               <LineChart data={data} margin={CHART_MARGIN}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.1} />
-
                 <XAxis
                   dataKey="date"
                   tickFormatter={(d) =>
@@ -1471,61 +1570,16 @@ export default function App() {
                 <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
 
                 {show.gold && (
-                  <Line
-                    name="Gold"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="goldValue"
-                    stroke="#f2c36b"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="Gold" yAxisId={usdAxisId} type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
                 {show.silver && (
-                  <Line
-                    name="Silver"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="silverValue"
-                    stroke="#0e2d4a"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="Silver" yAxisId={usdAxisId} type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
                 {show.strat && (
-                  <Line
-                    name="My Portfolio"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="strat"
-                    stroke="#a77d52"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="My Portfolio" yAxisId={usdAxisId} type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
                 )}
-
                 {show.gsr && (
-                  <Line
-                    name="GSR"
-                    yAxisId={gsrAxisId}
-                    type="monotone"
-                    dataKey="gsr"
-                    stroke="#960019"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4, fill: "#960019" }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
+                  <Line name="GSR" yAxisId="leftAxis" type="monotone" dataKey="gsr" stroke="#960019" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "#960019" }} connectNulls isAnimationActive={false} />
                 )}
 
                 {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
@@ -1533,40 +1587,6 @@ export default function App() {
                 )}
                 {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(s2g) && (
                   <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />
-                )}
-
-                {axisMode === "USD_BOTH" && (
-                  <Line
-                    name="__axis_helper__usd_left__"
-                    yAxisId="leftAxis"
-                    dataKey={usdHelperKey}
-                    type="monotone"
-                    stroke="transparent"
-                    strokeWidth={1}
-                    dot={false}
-                    activeDot={false}
-                    legendType="none"
-                    tooltipType="none"
-                    connectNulls
-                    isAnimationActive={false}
-                  />
-                )}
-
-                {axisMode === "RATIO_BOTH" && show.gsr && (
-                  <Line
-                    name="__axis_helper__ratio_right__"
-                    yAxisId="rightAxis"
-                    dataKey="gsr"
-                    type="monotone"
-                    stroke="transparent"
-                    strokeWidth={1}
-                    dot={false}
-                    activeDot={false}
-                    legendType="none"
-                    tooltipType="none"
-                    connectNulls
-                    isAnimationActive={false}
-                  />
                 )}
               </LineChart>
             </ResponsiveContainer>
