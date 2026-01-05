@@ -45,7 +45,6 @@ const fmt0 = (n) =>
 
 const fmtInt = (n) => {
   const x = typeof n === "bigint" ? n : BigInt(Math.trunc(n || 0));
-  // Convert to JS number for locale formatting when safe; fallback to string for huge values.
   const abs = x < 0n ? -x : x;
   if (abs <= 9_000_000_000_000_000n) return Number(x).toLocaleString("en-GB");
   return x.toString();
@@ -86,23 +85,14 @@ const parseIntOrNull = (s) => {
 };
 
 /* ----------------- UNIVERSAL ROUNDING (BigInt fixed-point) ----------------- */
-/**
- * We do all money arithmetic deterministically with integers:
- * - Prices are stored as micro-USD (USD * 1,000,000) => BigInt
- * - Amount/value are stored as cents (USD * 100) => BigInt
- * - Ounces are stored as OZ_SCALE (1e12) => BigInt
- *
- * This removes floating-point differences between JS engines (Safari vs Chrome).
- */
 const PRICE_SCALE = 1_000_000n; // micro USD
-const CENTS_TO_MICRO = 10_000n; // 1 cent = 0.01 USD = 10,000 micro USD
+const CENTS_TO_MICRO = 10_000n; // 1 cent = 10,000 micro USD
 const OZ_SCALE = 1_000_000_000_000n; // 1e12
 
 const bi = (x) => BigInt(x);
 
 const divRoundHalfUp = (num, den) => {
   if (den === 0n) return 0n;
-  // half-up: (n + d/2) / d, handling sign
   const sign = (num < 0n) !== (den < 0n) ? -1n : 1n;
   const a = num < 0n ? -num : num;
   const b = den < 0n ? -den : den;
@@ -112,8 +102,7 @@ const divRoundHalfUp = (num, den) => {
 
 const toPriceMicro = (priceNumber) => {
   if (!Number.isFinite(priceNumber)) return null;
-  // 6dp micro-USD integer string, deterministic
-  const s = Number(priceNumber).toFixed(6); // e.g. "3583.123456"
+  const s = Number(priceNumber).toFixed(6);
   const neg = s.startsWith("-");
   const t = neg ? s.slice(1) : s;
   const [a, b = ""] = t.split(".");
@@ -127,23 +116,22 @@ const centsToMicro = (cents) => bi(cents) * CENTS_TO_MICRO;
 const microToCents = (micro) => divRoundHalfUp(micro, CENTS_TO_MICRO);
 
 const usdCentsToOuncesScaled = (usdCents, priceMicro) => {
-  // oz_scaled = usd_micro * OZ_SCALE / price_micro
   const usdMicro = centsToMicro(usdCents);
   return divRoundHalfUp(usdMicro * OZ_SCALE, priceMicro);
 };
 
 const ouncesScaledToUsdCents = (ozScaled, priceMicro) => {
-  // usd_micro = oz_scaled * price_micro / OZ_SCALE
   const usdMicro = divRoundHalfUp(ozScaled * priceMicro, OZ_SCALE);
   return microToCents(usdMicro);
 };
 
-const applyFee97pct = (usdCents) => {
-  // half-up rounding: cents * 97 / 100
-  return divRoundHalfUp(bi(usdCents) * 97n, 100n);
-};
+const applyFee97pct = (usdCents) => divRoundHalfUp(bi(usdCents) * 97n, 100n);
 
-/* ----------------- CSV-first; API only to top-up the latest day ---- */
+/* ✅ THE KEY FIX: show $ rounded to nearest dollar (half-up) from cents */
+const centsToRoundedDollars = (cents) => divRoundHalfUp(bi(cents), 100n);
+const fmtMoney0 = (cents) => `$${fmtInt(centsToRoundedDollars(cents))}`;
+
+/* ---- CSV-first; API only to top-up the latest day ---- */
 async function fetchCSVText() {
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
   const candidates = ["prices.csv", "data/prices.csv", `${base}prices.csv`, `${base}data/prices.csv`];
@@ -156,21 +144,17 @@ async function fetchCSVText() {
         lastErr = new Error(`CSV HTTP ${res.status} for ${url}`);
         continue;
       }
-
       const ct = (res.headers.get("content-type") || "").toLowerCase();
       const textRaw = await res.text();
-
       if (ct.includes("text/html") || /^\s*<!doctype/i.test(textRaw)) {
         lastErr = new Error(`Got HTML instead of CSV from ${url}`);
         continue;
       }
-
       return textRaw.replace(/^\uFEFF/, "");
     } catch (e) {
       lastErr = e;
     }
   }
-
   throw lastErr || new Error("prices.csv not found");
 }
 
@@ -279,7 +263,7 @@ function useViewportMetrics() {
   return m;
 }
 
-/* ----------------- tooltips (exclusive open) ----------------- */
+/* ----------------- tooltips ----------------- */
 function InfoTip({ id, activeId, setActiveId, text }) {
   const open = activeId === id;
   const touchedRef = useRef(false);
@@ -402,12 +386,12 @@ function CurrencyInput({ value, onChange, className = "" }) {
   return <input className={`gsr-pill ${className}`} inputMode="numeric" value={txt} onChange={handleChange} />;
 }
 
-/* ----------------- Ratio input: blank allowed + mobile arrows on right ----------------- */
+/* ----------------- Ratio input (blank allowed + mobile stepper) ----------------- */
 function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 999, step = 1 }) {
   const sanitize = (raw) => raw.replace(/[^\d]/g, "").slice(0, 4);
 
   const commitClamp = () => {
-    if (!valueText) return; // keep blank
+    if (!valueText) return;
     const n = parseIntOrNull(valueText);
     if (n == null) return;
     const clamped = clampInt(n, min, max);
@@ -450,7 +434,7 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
           }}
         />
 
-        <div className="gsr-stepperBtns" aria-hidden={!isMobile}>
+        <div className="gsr-stepperBtns">
           <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)} tabIndex={isMobile ? 0 : -1}>
             ▲
           </button>
@@ -564,7 +548,6 @@ export default function App() {
     return n == null ? null : clampInt(n, 0, 999);
   }, [s2gText]);
 
-  /* ================= MANUAL AXIS SETTINGS ================= */
   const AXIS_COLOR = "#0b1b2a";
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
   const SHOW_AXIS_LABELS = !isMobile;
@@ -705,11 +688,6 @@ export default function App() {
     return rows.filter((r) => r.date >= start && r.date <= end);
   }, [rows, startIsoAdj, endIsoAdj]);
 
-  /**
-   * ✅ Universal money convention:
-   * - derive ounces (scaled) once from start day and amount cents
-   * - compute daily values in cents from integer math
-   */
   const valuedRows = useMemo(() => {
     if (!windowed.length) return [];
 
@@ -723,24 +701,26 @@ export default function App() {
     const goldOzScaledBH = amount > 0 && start.gold > 0 ? usdCentsToOuncesScaled(amountCents, goldMicro0) : 0n;
     const silverOzScaledBH = amount > 0 && start.silver > 0 ? usdCentsToOuncesScaled(amountCents, silverMicro0) : 0n;
 
-    return windowed.map((r) => {
-      const gMicro = toPriceMicro(r.gold);
-      const sMicro = toPriceMicro(r.silver);
-      if (!gMicro || !sMicro) return null;
+    return windowed
+      .map((r) => {
+        const gMicro = toPriceMicro(r.gold);
+        const sMicro = toPriceMicro(r.silver);
+        if (!gMicro || !sMicro) return null;
 
-      const goldValueCents = ouncesScaledToUsdCents(goldOzScaledBH, gMicro);
-      const silverValueCents = ouncesScaledToUsdCents(silverOzScaledBH, sMicro);
+        const goldValueCents = ouncesScaledToUsdCents(goldOzScaledBH, gMicro);
+        const silverValueCents = ouncesScaledToUsdCents(silverOzScaledBH, sMicro);
 
-      return {
-        ...r,
-        goldMicro: gMicro,
-        silverMicro: sMicro,
-        goldValueCents,
-        silverValueCents,
-        goldValue: Number(goldValueCents) / 100,
-        silverValue: Number(silverValueCents) / 100,
-      };
-    }).filter(Boolean);
+        return {
+          ...r,
+          goldMicro: gMicro,
+          silverMicro: sMicro,
+          goldValueCents,
+          silverValueCents,
+          goldValue: Number(goldValueCents) / 100,
+          silverValue: Number(silverValueCents) / 100,
+        };
+      })
+      .filter(Boolean);
   }, [windowed, amount]);
 
   const withStrategy = useMemo(() => {
@@ -852,15 +832,10 @@ export default function App() {
     const schgC = svC - amountCents;
     const pchgC = pvC - amountCents;
 
-    // Percentages: keep as Number but derived from deterministic cents
-    const gv = Number(gvC) / 100;
-    const sv = Number(svC) / 100;
-    const pv = Number(pvC) / 100;
-    const amt = amount;
-
-    const gpct = amt > 0 ? (gv / amt - 1) * 100 : 0;
-    const spct = amt > 0 ? (sv / amt - 1) * 100 : 0;
-    const ppct = amt > 0 ? (pv / amt - 1) * 100 : 0;
+    // Percentages derived from cents (deterministic) but displayed rounded
+    const gpct = amountCents > 0n ? (Number(gvC) / Number(amountCents) - 1) * 100 : 0;
+    const spct = amountCents > 0n ? (Number(svC) / Number(amountCents) - 1) * 100 : 0;
+    const ppct = amountCents > 0n ? (Number(pvC) / Number(amountCents) - 1) * 100 : 0;
 
     const diffPg = ppct - gpct;
     const diffPs = ppct - spct;
@@ -944,108 +919,36 @@ export default function App() {
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { usdDomain: ["auto", "auto"], usdTicks: undefined };
 
-    // keep existing nice ticks logic (display-only)
-    const out = (function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
-      if (!Number.isFinite(min) || !Number.isFinite(max))
-        return { domain: ["auto", "auto"], ticks: undefined };
-
-      if (min === max) {
-        const a = min - 1;
-        const b = max + 1;
-        return { domain: [a, b], ticks: [a, min, b] };
-      }
-
-      const range = max - min;
-      const pad = range * padFrac;
-
-      let paddedMin = min - pad * 0.25;
-      let paddedMax = max + pad;
-
-      if (clampMinToZero) paddedMin = Math.max(0, paddedMin);
-
-      // niceTicks
-      const range2 = paddedMax - paddedMin;
-      const roughStep = range2 / Math.max(2, target - 1);
-      const pow10 = Math.pow(10, Math.floor(Math.log10(roughStep)));
-      const candidates = [1, 2, 2.5, 5, 10].map((m) => m * pow10);
-      const step = candidates.reduce(
-        (best, s) => (Math.abs(s - roughStep) < Math.abs(best - roughStep) ? s : best),
-        candidates[0]
-      );
-
-      const niceMin = Math.floor(paddedMin / step) * step;
-      const niceMax = Math.ceil(paddedMax / step) * step;
-
-      const ticks = [];
-      for (let v = niceMin; v <= niceMax + step / 2; v += step) ticks.push(v);
-      return { domain: [niceMin, niceMax], ticks };
-    })(min, max, 7, 0.06, true);
-
-    return { usdDomain: out.domain, usdTicks: out.ticks };
+    // display ticks only
+    const range = max - min;
+    const pad = range * 0.06;
+    const pMin = Math.max(0, min - pad * 0.25);
+    const pMax = max + pad;
+    return { usdDomain: [pMin, pMax], usdTicks: undefined };
   }, [data, show]);
 
   const { ratioDomain, ratioTicks } = useMemo(() => {
     if (!data.length) return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
-
     let min = Infinity;
     let max = -Infinity;
-
     for (const r of data) {
       if (r.gsr != null && Number.isFinite(r.gsr)) {
         min = Math.min(min, r.gsr);
         max = Math.max(max, r.gsr);
       }
     }
-
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
-
-    const out = (function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
-      if (!Number.isFinite(min) || !Number.isFinite(max))
-        return { domain: ["auto", "auto"], ticks: undefined };
-
-      if (min === max) {
-        const a = min - 1;
-        const b = max + 1;
-        return { domain: [a, b], ticks: [a, min, b] };
-      }
-
-      const range = max - min;
-      const pad = range * padFrac;
-
-      let paddedMin = min - pad * 0.25;
-      let paddedMax = max + pad;
-
-      if (clampMinToZero) paddedMin = Math.max(0, paddedMin);
-
-      const range2 = paddedMax - paddedMin;
-      const roughStep = range2 / Math.max(2, target - 1);
-      const pow10 = Math.pow(10, Math.floor(Math.log10(roughStep)));
-      const candidates = [1, 2, 2.5, 5, 10].map((m) => m * pow10);
-      const step = candidates.reduce(
-        (best, s) => (Math.abs(s - roughStep) < Math.abs(best - roughStep) ? s : best),
-        candidates[0]
-      );
-
-      const niceMin = Math.floor(paddedMin / step) * step;
-      const niceMax = Math.ceil(paddedMax / step) * step;
-
-      const ticks = [];
-      for (let v = niceMin; v <= niceMax + step / 2; v += step) ticks.push(v);
-      return { domain: [niceMin, niceMax], ticks };
-    })(min, max, 7, 0.06, false);
-
-    return { ratioDomain: out.domain, ratioTicks: out.ticks };
+    const range = max - min;
+    const pad = range * 0.06;
+    return { ratioDomain: [min - pad * 0.25, max + pad], ratioTicks: undefined };
   }, [data]);
 
   const leftIsRatio = axisMode === "MIXED" || axisMode === "RATIO_BOTH";
   const rightIsRatio = axisMode === "RATIO_BOTH";
 
   const leftDomain = leftIsRatio ? ratioDomain : usdDomain;
-  const leftTicks = leftIsRatio ? ratioTicks : usdTicks;
-
   const rightDomain = rightIsRatio ? ratioDomain : usdDomain;
-  const rightTicks = rightIsRatio ? ratioTicks : usdTicks;
 
   const leftLabel = hideAxisText ? "" : leftIsRatio ? "Ratio" : "Value (USD)";
   const rightLabel = hideAxisText ? "" : rightIsRatio ? "Ratio" : "Value (USD)";
@@ -1053,26 +956,13 @@ export default function App() {
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
   const gsrAxisId = "leftAxis";
 
-  const axisKeyPart = useMemo(() => {
-    return JSON.stringify({
-      axisMode,
-      show,
-      leftDomain,
-      leftTicks,
-      rightDomain,
-      rightTicks,
-      usdAxisId,
-    });
-  }, [axisMode, show, leftDomain, leftTicks, rightDomain, rightTicks, usdAxisId]);
-
-  const chartRemountKey = useMemo(() => {
-    return JSON.stringify({
-      w,
-      h,
-      chartH: CHART_HEIGHT,
-      axisKeyPart,
-    });
-  }, [w, h, CHART_HEIGHT, axisKeyPart]);
+  const chartRemountKey = useMemo(() => JSON.stringify({ w, h, chartH: CHART_HEIGHT, axisMode, show }), [
+    w,
+    h,
+    CHART_HEIGHT,
+    axisMode,
+    show,
+  ]);
 
   const yTickFont = isMobile ? 11 : 13;
   const xTickFont = isMobile ? 11 : 12;
@@ -1193,7 +1083,6 @@ export default function App() {
         .gsr-datePills--compact{ gap:6px; padding: 0 10px; }
         .is-compact .gsr-label{ font-size: 12px; }
 
-        /* stepper */
         .gsr-stepper{ position: relative; width: 100%; }
         .gsr-stepperInput{ padding-right: 14px; }
         .gsr-stepperBtns{
@@ -1225,12 +1114,6 @@ export default function App() {
         }
         .gsr-stepBtn:active{ transform: scale(0.98); }
         .gsr-stepper.is-mobile .gsr-stepperBtns{ display:flex; }
-
-        @media (max-width: 420px){
-          .gsr-dateSeg{ width: 42px; font-size: 15px; }
-          .gsr-dateYear{ width: 82px; font-size: 15px; }
-          .gsr-pill{ font-size: 15px; }
-        }
 
         .gsr-cards{
           display:grid;
@@ -1334,7 +1217,6 @@ export default function App() {
           justify-content:center;
         }
 
-        /* tooltip */
         .gsr-tipWrap{ position: relative; display:inline-flex; align-items:center; margin-left: 6px; }
         .gsr-tipBtn{
           width: 18px; height: 18px; border-radius: 999px; border: 0;
@@ -1343,7 +1225,6 @@ export default function App() {
           cursor: pointer; padding: 0; display:inline-flex; align-items:center; justify-content:center;
           transform: translateY(-1px);
         }
-        .gsr-tipBtn:active{ transform: translateY(0px) scale(0.98); }
         .gsr-tipBubble{
           position:absolute; z-index: 50;
           bottom: calc(100% + 10px);
@@ -1360,15 +1241,6 @@ export default function App() {
           line-height: 1.25;
           pointer-events: none;
         }
-        .gsr-tipBubble::after{
-          content:"";
-          position:absolute;
-          top: 100%;
-          left: 50%;
-          transform: translateX(-50%);
-          border: 8px solid transparent;
-          border-top-color: rgba(255,255,255,0.98);
-        }
       `}</style>
 
       <div className="gsr-container">
@@ -1377,7 +1249,6 @@ export default function App() {
           <div className="gsr-title-underline" />
         </header>
 
-        {/* controls */}
         <section className="gsr-controls">
           <div className="gsr-control">
             <span className="gsr-label">Initial Amount (USD)</span>
@@ -1409,35 +1280,24 @@ export default function App() {
           <RatioInput label="Gold → Silver" valueText={g2sText} onChangeText={setG2SText} isMobile={isMobile} />
         </section>
 
-        {/* cards */}
         <section className="gsr-cards">
           <div className="gsr-leftStack">
             <div className="gsr-card">
               <div className="gsr-cardTitle">Gold</div>
-              <div className="gsr-cardValue">${fmtInt(stats.gvC / 100n)}</div>
+              <div className="gsr-cardValue">{fmtMoney0(stats.gvC)}</div>
               <div className="gsr-cardInner">
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip
-                        id="gold_change"
-                        activeId={activeTipId}
-                        setActiveId={setActiveTipId}
-                        text="Change in value (USD) for the selected period."
-                      />
+                      <InfoTip id="gold_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
                     </span>
-                    <span className="gsr-strong">${fmtInt(stats.gchgC / 100n)}</span>
+                    <span className="gsr-strong">{fmtMoney0(stats.gchgC)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip
-                        id="gold_return"
-                        activeId={activeTipId}
-                        setActiveId={setActiveTipId}
-                        text="Percentage return for the selected period."
-                      />
+                      <InfoTip id="gold_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
                   </div>
@@ -1447,30 +1307,20 @@ export default function App() {
 
             <div className="gsr-card">
               <div className="gsr-cardTitle">Silver</div>
-              <div className="gsr-cardValue">${fmtInt(stats.svC / 100n)}</div>
+              <div className="gsr-cardValue">{fmtMoney0(stats.svC)}</div>
               <div className="gsr-cardInner">
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip
-                        id="silver_change"
-                        activeId={activeTipId}
-                        setActiveId={setActiveTipId}
-                        text="Change in value (USD) for the selected period."
-                      />
+                      <InfoTip id="silver_change" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Change in value (USD) for the selected period." />
                     </span>
-                    <span className="gsr-strong">${fmtInt(stats.schgC / 100n)}</span>
+                    <span className="gsr-strong">{fmtMoney0(stats.schgC)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip
-                        id="silver_return"
-                        activeId={activeTipId}
-                        setActiveId={setActiveTipId}
-                        text="Percentage return for the selected period."
-                      />
+                      <InfoTip id="silver_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.spct)}%</span>
                   </div>
@@ -1481,86 +1331,39 @@ export default function App() {
 
           <div className="gsr-card gsr-card--portfolio">
             <div className="gsr-cardTitle">My Portfolio</div>
-            <div className="gsr-cardValue">${fmtInt(stats.pvC / 100n)}</div>
+            <div className="gsr-cardValue">{fmtMoney0(stats.pvC)}</div>
 
             <div className="gsr-cardInner">
               <div className="gsr-portfolioGrid">
                 <div className="gsr-muted">
                   Change:
-                  <InfoTip
-                    id="p_change"
-                    activeId={activeTipId}
-                    setActiveId={setActiveTipId}
-                    text="Change in value (USD) and percentage return for the selected period."
-                  />
+                  <InfoTip id="p_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) and percentage return for the selected period." />
                 </div>
                 <div className="right gsr-strong">
-                  ${fmtInt(stats.pchgC / 100n)} | {fmt0(stats.ppct)}%
+                  {fmtMoney0(stats.pchgC)} | {fmt0(stats.ppct)}%
                 </div>
 
                 <div className="gsr-muted">
                   Duration:
-                  <InfoTip
-                    id="p_duration"
-                    activeId={activeTipId}
-                    setActiveId={setActiveTipId}
-                    text="Total time between your chosen start date and end date (years and months)."
-                  />
+                  <InfoTip id="p_duration" activeId={activeTipId} setActiveId={setActiveTipId} text="Total time between your chosen start date and end date (years and months)." />
                 </div>
                 <div className="right gsr-strong">{durationText}</div>
 
                 <div className="gsr-muted">
                   Beats Gold (Time):
-                  <InfoTip
-                    id="p_beats_g"
-                    activeId={activeTipId}
-                    setActiveId={setActiveTipId}
-                    text="Percentage of days where My Portfolio value is higher than staying in Gold."
-                  />
+                  <InfoTip id="p_beats_g" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage of days where My Portfolio value is higher than staying in Gold." />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsG)}%</div>
 
                 <div className="gsr-muted">
                   Beats Silver (Time):
-                  <InfoTip
-                    id="p_beats_s"
-                    activeId={activeTipId}
-                    setActiveId={setActiveTipId}
-                    text="Percentage of days where My Portfolio value is higher than staying in Silver."
-                  />
+                  <InfoTip id="p_beats_s" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage of days where My Portfolio value is higher than staying in Silver." />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsS)}%</div>
 
                 <div className="gsr-muted">
-                  vs Gold:
-                  <InfoTip
-                    id="p_vs_g"
-                    activeId={activeTipId}
-                    setActiveId={setActiveTipId}
-                    text="My Portfolio return minus Gold-only return (percentage points)."
-                  />
-                </div>
-                <div className="right gsr-strong">{fmt0(stats.diffPg)}%</div>
-
-                <div className="gsr-muted">
-                  vs Silver:
-                  <InfoTip
-                    id="p_vs_s"
-                    activeId={activeTipId}
-                    setActiveId={setActiveTipId}
-                    text="My Portfolio return minus Silver-only return (percentage points)."
-                  />
-                </div>
-                <div className="right gsr-strong">{fmt0(stats.diffPs)}%</div>
-
-                <div className="gsr-muted">
                   Switches:
-                  <InfoTip
-                    id="p_switches"
-                    activeId={activeTipId}
-                    setActiveId={setActiveTipId}
-                    text="Number of switches between Gold and Silver based on your thresholds."
-                  />
+                  <InfoTip id="p_switches" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of switches between Gold and Silver based on your thresholds." />
                 </div>
                 <div className="right gsr-strong">
                   {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}
@@ -1572,42 +1375,25 @@ export default function App() {
 
         {err && <p className="gsr-error">Error: {err}</p>}
 
-        {/* chart */}
         <div className="gsr-chartWrap">
           <div className="gsr-chartTop">
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.gold}
-                onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.gold} onChange={(e) => setShow((s) => ({ ...s, gold: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#f2c36b" }} />
               Gold
             </label>
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.silver}
-                onChange={(e) => setShow((s) => ({ ...s, silver: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.silver} onChange={(e) => setShow((s) => ({ ...s, silver: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#0e2d4a" }} />
               Silver
             </label>
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.strat}
-                onChange={(e) => setShow((s) => ({ ...s, strat: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.strat} onChange={(e) => setShow((s) => ({ ...s, strat: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#a77d52" }} />
               My Portfolio
             </label>
             <label className="gsr-toggle">
-              <input
-                type="checkbox"
-                checked={show.gsr}
-                onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))}
-              />
+              <input type="checkbox" checked={show.gsr} onChange={(e) => setShow((s) => ({ ...s, gsr: e.target.checked }))} />
               <span className="gsr-dot" style={{ background: "#960019" }} />
               GSR
             </label>
@@ -1630,124 +1416,47 @@ export default function App() {
                 />
 
                 <YAxis
-                  key={`leftAxis__${axisKeyPart}`}
                   yAxisId="leftAxis"
                   orientation="left"
                   type="number"
                   scale="linear"
-                  allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
-                  tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tick={{ fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
                   domain={leftDomain}
-                  ticks={leftTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
-                    hideAxisText || !SHOW_AXIS_LABELS
+                    !SHOW_AXIS_LABELS
                       ? undefined
-                      : {
-                          value: leftLabel,
-                          angle: -90,
-                          position: "insideLeft",
-                          offset: 0,
-                          dy: 0,
-                          fill: AXIS_COLOR,
-                          fontWeight: 900,
-                        }
+                      : { value: leftLabel, angle: -90, position: "insideLeft", fill: AXIS_COLOR, fontWeight: 900 }
                   }
                 />
 
                 <YAxis
-                  key={`rightAxis__${axisKeyPart}`}
                   yAxisId="rightAxis"
                   orientation="right"
                   type="number"
                   scale="linear"
-                  allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
-                  tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
-                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tick={{ fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
                   domain={rightDomain}
-                  ticks={rightTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
-                    hideAxisText || !SHOW_AXIS_LABELS
+                    !SHOW_AXIS_LABELS
                       ? undefined
-                      : {
-                          value: rightLabel,
-                          angle: 90,
-                          position: "insideRight",
-                          offset: 0,
-                          dy: 0,
-                          fill: AXIS_COLOR,
-                          fontWeight: 900,
-                        }
+                      : { value: rightLabel, angle: 90, position: "insideRight", fill: AXIS_COLOR, fontWeight: 900 }
                   }
                 />
 
                 <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
 
-                {show.gold && (
-                  <Line
-                    name="Gold"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="goldValue"
-                    stroke="#f2c36b"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
-                )}
-                {show.silver && (
-                  <Line
-                    name="Silver"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="silverValue"
-                    stroke="#0e2d4a"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
-                )}
-                {show.strat && (
-                  <Line
-                    name="My Portfolio"
-                    yAxisId={usdAxisId}
-                    type="monotone"
-                    dataKey="strat"
-                    stroke="#a77d52"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4 }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
-                )}
-
-                {show.gsr && (
-                  <Line
-                    name="GSR"
-                    yAxisId={gsrAxisId}
-                    type="monotone"
-                    dataKey="gsr"
-                    stroke="#960019"
-                    strokeWidth={2}
-                    dot={false}
-                    activeDot={{ r: 4, fill: "#960019" }}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
-                )}
+                {show.gold && <Line name="Gold" yAxisId={usdAxisId} type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
+                {show.silver && <Line name="Silver" yAxisId={usdAxisId} type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
+                {show.strat && <Line name="My Portfolio" yAxisId={usdAxisId} type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
+                {show.gsr && <Line name="GSR" yAxisId={gsrAxisId} type="monotone" dataKey="gsr" stroke="#960019" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
 
                 {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
                   <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />
