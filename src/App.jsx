@@ -11,6 +11,14 @@ import {
   Tooltip,
 } from "recharts";
 
+/* ====================== CONFIG ====================== */
+/** ✅ Single canonical CSV path (place file at public/data/prices.csv) */
+const CSV_RELATIVE_PATH = "data/prices.csv";
+
+/** ✅ Turn OFF API top-up to guarantee same dataset everywhere */
+const ENABLE_API_TOPUP = false;
+/* ==================================================== */
+
 /* ----------------- helpers ----------------- */
 function parseDMY(dateStr) {
   if (!dateStr) return null;
@@ -84,7 +92,7 @@ const parseIntOrNull = (s) => {
   return Number.isFinite(n) ? n : null;
 };
 
-/* ----------------- UNIVERSAL ROUNDING (BigInt fixed-point) ----------------- */
+/* ----------------- UNIVERSAL DETERMINISTIC MATH ----------------- */
 const PRICE_SCALE = 1_000_000n; // micro USD
 const CENTS_TO_MICRO = 10_000n; // 1 cent = 10,000 micro USD
 const OZ_SCALE = 1_000_000_000_000n; // 1e12
@@ -112,7 +120,6 @@ const toPriceMicro = (priceNumber) => {
 };
 
 const centsToMicro = (cents) => bi(cents) * CENTS_TO_MICRO;
-
 const microToCents = (micro) => divRoundHalfUp(micro, CENTS_TO_MICRO);
 
 const usdCentsToOuncesScaled = (usdCents, priceMicro) => {
@@ -127,37 +134,28 @@ const ouncesScaledToUsdCents = (ozScaled, priceMicro) => {
 
 const applyFee97pct = (usdCents) => divRoundHalfUp(bi(usdCents) * 97n, 100n);
 
-/* ✅ THE KEY FIX: show $ rounded to nearest dollar (half-up) from cents */
+/** ✅ single display convention everywhere */
 const centsToRoundedDollars = (cents) => divRoundHalfUp(bi(cents), 100n);
 const fmtMoney0 = (cents) => `$${fmtInt(centsToRoundedDollars(cents))}`;
 
-/* ---- CSV-first; API only to top-up the latest day ---- */
+/* ---- CSV only (deterministic) ---- */
 async function fetchCSVText() {
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
-  const candidates = ["prices.csv", "data/prices.csv", `${base}prices.csv`, `${base}data/prices.csv`];
 
-  let lastErr = null;
-  for (const url of candidates) {
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) {
-        lastErr = new Error(`CSV HTTP ${res.status} for ${url}`);
-        continue;
-      }
-      const ct = (res.headers.get("content-type") || "").toLowerCase();
-      const textRaw = await res.text();
-      if (ct.includes("text/html") || /^\s*<!doctype/i.test(textRaw)) {
-        lastErr = new Error(`Got HTML instead of CSV from ${url}`);
-        continue;
-      }
-      return textRaw.replace(/^\uFEFF/, "");
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error("prices.csv not found");
+  // ✅ Force ONE URL only (no candidates)
+  // ✅ Cache-bust so GitHub Pages and local serve same latest CSV
+  const url = `${base}${CSV_RELATIVE_PATH}?v=${Date.now()}`;
+
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`CSV HTTP ${res.status} for ${url}`);
+
+  const textRaw = await res.text();
+  if (/^\s*<!doctype/i.test(textRaw)) throw new Error(`Got HTML instead of CSV from ${url}`);
+
+  return textRaw.replace(/^\uFEFF/, "");
 }
 
+/* (Optional) API top-up, disabled by default */
 async function fetchLatestFromAPI() {
   try {
     const key = import.meta?.env?.VITE_METAL_API_KEY || "98ce31de34ecaadcd00d49d12137a56a";
@@ -187,13 +185,7 @@ function useViewportMetrics() {
     const w = typeof window !== "undefined" ? Math.round(window.innerWidth) : 1200;
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
     const h = Math.round(vv?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800));
-    return {
-      w,
-      h,
-      isMobile: w <= 640,
-      isTablet: w > 640 && w <= 1024,
-      isLandscape: w > h,
-    };
+    return { w, h, isMobile: w <= 640, isTablet: w > 640 && w <= 1024, isLandscape: w > h };
   };
 
   const [m, setM] = useState(read);
@@ -340,29 +332,11 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
     <div className={`gsr-control ${compact ? "is-compact" : ""}`}>
       <span className="gsr-label">{label}</span>
       <div className={`gsr-datePills ${compact ? "gsr-datePills--compact" : ""}`} onBlur={commit}>
-        <input
-          className="gsr-dateSeg"
-          inputMode="numeric"
-          value={dd}
-          onChange={(e) => setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
-          onKeyDown={onKey}
-        />
+        <input className="gsr-dateSeg" inputMode="numeric" value={dd} onChange={(e) => setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))} onKeyDown={onKey} />
         <span className="gsr-dateSlash">/</span>
-        <input
-          className="gsr-dateSeg"
-          inputMode="numeric"
-          value={mm}
-          onChange={(e) => setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
-          onKeyDown={onKey}
-        />
+        <input className="gsr-dateSeg" inputMode="numeric" value={mm} onChange={(e) => setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))} onKeyDown={onKey} />
         <span className="gsr-dateSlash">/</span>
-        <input
-          className="gsr-dateSeg gsr-dateYear"
-          inputMode="numeric"
-          value={yyyy}
-          onChange={(e) => setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
-          onKeyDown={onKey}
-        />
+        <input className="gsr-dateSeg gsr-dateYear" inputMode="numeric" value={yyyy} onChange={(e) => setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))} onKeyDown={onKey} />
       </div>
     </div>
   );
@@ -409,7 +383,6 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
   return (
     <div className="gsr-control">
       <span className="gsr-label">{label}</span>
-
       <div className={`gsr-stepper ${isMobile ? "is-mobile" : ""}`}>
         <input
           className="gsr-pill gsr-pill--small gsr-stepperInput"
@@ -419,10 +392,7 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
           value={valueText}
           onChange={(e) => {
             const raw = e.target.value;
-            if (raw === "") {
-              onChangeText("");
-              return;
-            }
+            if (raw === "") return onChangeText("");
             onChangeText(sanitize(raw));
           }}
           onBlur={commitClamp}
@@ -433,14 +403,9 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
             }
           }}
         />
-
         <div className="gsr-stepperBtns">
-          <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)} tabIndex={isMobile ? 0 : -1}>
-            ▲
-          </button>
-          <button type="button" className="gsr-stepBtn" onClick={() => bump(-1)} tabIndex={isMobile ? 0 : -1}>
-            ▼
-          </button>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)} tabIndex={isMobile ? 0 : -1}>▲</button>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(-1)} tabIndex={isMobile ? 0 : -1}>▼</button>
         </div>
       </div>
     </div>
@@ -513,10 +478,9 @@ function diffYearsMonths(startDate, endDate) {
   return { years: Math.floor(months / 12), months: months % 12 };
 }
 
-/* ----------------- component ----------------- */
+/* ======================= component ======================= */
 export default function App() {
   const { isMobile, isTablet, w, h } = useViewportMetrics();
-
   const [activeTipId, setActiveTipId] = useState(null);
 
   useEffect(() => {
@@ -552,18 +516,12 @@ export default function App() {
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
   const SHOW_AXIS_LABELS = !isMobile;
 
-  const CHART_MARGIN = useMemo(() => {
-    if (isMobile) return { top: 18, right: 8, left: 8, bottom: 18 };
-    return { top: 20, right: 15, left: 15, bottom: 22 };
-  }, [isMobile]);
+  const CHART_MARGIN = useMemo(() => (isMobile ? { top: 18, right: 8, left: 8, bottom: 18 } : { top: 20, right: 15, left: 15, bottom: 22 }), [isMobile]);
 
   const CHART_HEIGHT = useMemo(() => {
-    const vh = h;
-    const vw = w;
-    const landscape = vw > vh;
-
-    if (isMobile && landscape) return Math.max(260, Math.min(560, Math.round(vh * 0.78)));
-    if (isMobile) return Math.max(320, Math.min(520, Math.round(vh * 0.52)));
+    const landscape = w > h;
+    if (isMobile && landscape) return Math.max(260, Math.min(560, Math.round(h * 0.78)));
+    if (isMobile) return Math.max(320, Math.min(520, Math.round(h * 0.52)));
     if (isTablet) return 520;
     return 660;
   }, [isMobile, isTablet, w, h]);
@@ -572,11 +530,7 @@ export default function App() {
     (async () => {
       try {
         const text = await fetchCSVText();
-        const lines = text.split(/\r?\n/);
-        const header = lines.find((l) => l.trim().length > 0) || "";
-        const pref = header.includes("\t") ? "\t" : header.includes(";") ? ";" : ",";
-
-        let parsed = Papa.parse(text, { header: true, skipEmptyLines: true, delimiter: "", newline: "" });
+        const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
 
         let mapped = (parsed.data || [])
           .map((o) => {
@@ -590,40 +544,21 @@ export default function App() {
           })
           .filter((d) => d.date && d.gold != null && d.silver != null && d.gsr != null);
 
-        if (!mapped.length) {
-          parsed = Papa.parse(text, { header: true, skipEmptyLines: true, delimiter: pref });
-          mapped = (parsed.data || [])
-            .map((o) => {
-              const m = {};
-              for (const k in o) m[norm(k)] = o[k];
-              const gold = toNum(m.gold);
-              const silver = toNum(m.silver);
-              const date = parseDMY(m.date);
-              const gsr = gold != null && silver != null && silver !== 0 ? gold / silver : null;
-              return { date, gold, silver, gsr };
-            })
-            .filter((d) => d.date && d.gold != null && d.silver != null && d.gsr != null);
-        }
-
         mapped.sort((a, b) => a.date - b.date);
 
-        try {
-          if (mapped.length) {
-            const last = mapped[mapped.length - 1].date;
-            const today = new Date();
-            const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-            if (last < todayLocal) {
-              const api = await fetchLatestFromAPI();
-              if (api.ok && api.row?.date) {
-                const key = toIsoLocal(api.row.date);
-                const seen = new Set(mapped.map((r) => toIsoLocal(r.date)));
-                if (!seen.has(key)) mapped.push(api.row);
-                mapped.sort((a, b) => a.date - b.date);
-              }
+        if (ENABLE_API_TOPUP && mapped.length) {
+          const last = mapped[mapped.length - 1].date;
+          const today = new Date();
+          const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+          if (last < todayLocal) {
+            const api = await fetchLatestFromAPI();
+            if (api.ok && api.row?.date) {
+              const key = toIsoLocal(api.row.date);
+              const seen = new Set(mapped.map((r) => toIsoLocal(r.date)));
+              if (!seen.has(key)) mapped.push(api.row);
+              mapped.sort((a, b) => a.date - b.date);
             }
           }
-        } catch (e) {
-          console.warn("Top-up merge failed:", e);
         }
 
         setRows(mapped);
@@ -767,17 +702,10 @@ export default function App() {
           ? ouncesScaledToUsdCents(ozGoldScaled, r.goldMicro)
           : ouncesScaledToUsdCents(ozSilverScaled, r.silverMicro);
 
-      return {
-        ...r,
-        stratCents,
-        strat: Number(stratCents) / 100,
-        switches: switchesCount,
-        stratMetal: metal,
-      };
+      return { ...r, stratCents, strat: Number(stratCents) / 100, switches: switchesCount, stratMetal: metal };
     });
 
-    const endsIn = out[out.length - 1]?.stratMetal || metal;
-    return { data: out, endsIn };
+    return { data: out, endsIn: out[out.length - 1]?.stratMetal || metal };
   }, [valuedRows, amount, g2s, s2g, startMetal]);
 
   const data = withStrategy.data;
@@ -803,23 +731,7 @@ export default function App() {
     const amountCents = bi(amount) * 100n;
 
     if (!data.length) {
-      return {
-        gvC: amountCents,
-        svC: amountCents,
-        pvC: amountCents,
-        gchgC: 0n,
-        schgC: 0n,
-        pchgC: 0n,
-        gpct: 0,
-        spct: 0,
-        ppct: 0,
-        diffPg: 0,
-        diffPs: 0,
-        switches: 0,
-        pBeatsG: 0,
-        pBeatsS: 0,
-        endsIn: "GOLD",
-      };
+      return { gvC: amountCents, svC: amountCents, pvC: amountCents, gchgC: 0n, schgC: 0n, pchgC: 0n, gpct: 0, spct: 0, ppct: 0, switches: 0, pBeatsG: 0, pBeatsS: 0, endsIn: "GOLD" };
     }
 
     const end = data[data.length - 1];
@@ -832,52 +744,27 @@ export default function App() {
     const schgC = svC - amountCents;
     const pchgC = pvC - amountCents;
 
-    // Percentages derived from cents (deterministic) but displayed rounded
     const gpct = amountCents > 0n ? (Number(gvC) / Number(amountCents) - 1) * 100 : 0;
     const spct = amountCents > 0n ? (Number(svC) / Number(amountCents) - 1) * 100 : 0;
     const ppct = amountCents > 0n ? (Number(pvC) / Number(amountCents) - 1) * 100 : 0;
 
-    const diffPg = ppct - gpct;
-    const diffPs = ppct - spct;
-
-    let totalG = 0,
-      winsG = 0;
-    let totalS = 0,
-      winsS = 0;
+    let totalG = 0, winsG = 0;
+    let totalS = 0, winsS = 0;
 
     for (const r of data) {
-      if (r.stratCents != null && r.goldValueCents != null) {
-        totalG++;
-        if (r.stratCents > r.goldValueCents) winsG++;
-      }
-      if (r.stratCents != null && r.silverValueCents != null) {
-        totalS++;
-        if (r.stratCents > r.silverValueCents) winsS++;
-      }
+      if (r.stratCents != null && r.goldValueCents != null) { totalG++; if (r.stratCents > r.goldValueCents) winsG++; }
+      if (r.stratCents != null && r.silverValueCents != null) { totalS++; if (r.stratCents > r.silverValueCents) winsS++; }
     }
 
     const pBeatsG = totalG ? (winsG / totalG) * 100 : 0;
     const pBeatsS = totalS ? (winsS / totalS) * 100 : 0;
 
-    const switches = end.switches ?? 0;
-    const endsIn = (withStrategy.endsIn || "gold").toUpperCase();
-
     return {
-      gvC,
-      svC,
-      pvC,
-      gchgC,
-      schgC,
-      pchgC,
-      gpct,
-      spct,
-      ppct,
-      diffPg,
-      diffPs,
-      switches,
-      pBeatsG,
-      pBeatsS,
-      endsIn,
+      gvC, svC, pvC, gchgC, schgC, pchgC,
+      gpct, spct, ppct,
+      switches: end.switches ?? 0,
+      pBeatsG, pBeatsS,
+      endsIn: (withStrategy.endsIn || "gold").toUpperCase(),
     };
   }, [data, amount, withStrategy.endsIn]);
 
@@ -885,63 +772,36 @@ export default function App() {
   const gsrOn = show.gsr;
 
   const axisMode =
-    !anyUsdOn && !gsrOn
-      ? "NONE"
-      : gsrOn && !anyUsdOn
-      ? "RATIO_BOTH"
-      : !gsrOn && anyUsdOn
-      ? "USD_BOTH"
-      : "MIXED";
+    !anyUsdOn && !gsrOn ? "NONE" :
+    gsrOn && !anyUsdOn ? "RATIO_BOTH" :
+    !gsrOn && anyUsdOn ? "USD_BOTH" : "MIXED";
 
   const hideAxisText = axisMode === "NONE";
 
-  const { usdDomain, usdTicks } = useMemo(() => {
-    if (!data.length) return { usdDomain: ["auto", "auto"], usdTicks: undefined };
-
-    let min = Infinity;
-    let max = -Infinity;
-
+  const { usdDomain } = useMemo(() => {
+    if (!data.length) return { usdDomain: ["auto", "auto"] };
+    let min = Infinity, max = -Infinity;
     for (const r of data) {
-      if (show.gold && r.goldValue != null) {
-        min = Math.min(min, r.goldValue);
-        max = Math.max(max, r.goldValue);
-      }
-      if (show.silver && r.silverValue != null) {
-        min = Math.min(min, r.silverValue);
-        max = Math.max(max, r.silverValue);
-      }
-      if (show.strat && r.strat != null) {
-        min = Math.min(min, r.strat);
-        max = Math.max(max, r.strat);
-      }
+      if (show.gold && r.goldValue != null) { min = Math.min(min, r.goldValue); max = Math.max(max, r.goldValue); }
+      if (show.silver && r.silverValue != null) { min = Math.min(min, r.silverValue); max = Math.max(max, r.silverValue); }
+      if (show.strat && r.strat != null) { min = Math.min(min, r.strat); max = Math.max(max, r.strat); }
     }
-
-    if (!Number.isFinite(min) || !Number.isFinite(max))
-      return { usdDomain: ["auto", "auto"], usdTicks: undefined };
-
-    // display ticks only
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return { usdDomain: ["auto", "auto"] };
     const range = max - min;
     const pad = range * 0.06;
-    const pMin = Math.max(0, min - pad * 0.25);
-    const pMax = max + pad;
-    return { usdDomain: [pMin, pMax], usdTicks: undefined };
+    return { usdDomain: [Math.max(0, min - pad * 0.25), max + pad] };
   }, [data, show]);
 
-  const { ratioDomain, ratioTicks } = useMemo(() => {
-    if (!data.length) return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
-    let min = Infinity;
-    let max = -Infinity;
+  const { ratioDomain } = useMemo(() => {
+    if (!data.length) return { ratioDomain: ["auto", "auto"] };
+    let min = Infinity, max = -Infinity;
     for (const r of data) {
-      if (r.gsr != null && Number.isFinite(r.gsr)) {
-        min = Math.min(min, r.gsr);
-        max = Math.max(max, r.gsr);
-      }
+      if (r.gsr != null && Number.isFinite(r.gsr)) { min = Math.min(min, r.gsr); max = Math.max(max, r.gsr); }
     }
-    if (!Number.isFinite(min) || !Number.isFinite(max))
-      return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return { ratioDomain: ["auto", "auto"] };
     const range = max - min;
     const pad = range * 0.06;
-    return { ratioDomain: [min - pad * 0.25, max + pad], ratioTicks: undefined };
+    return { ratioDomain: [min - pad * 0.25, max + pad] };
   }, [data]);
 
   const leftIsRatio = axisMode === "MIXED" || axisMode === "RATIO_BOTH";
@@ -956,13 +816,7 @@ export default function App() {
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
   const gsrAxisId = "leftAxis";
 
-  const chartRemountKey = useMemo(() => JSON.stringify({ w, h, chartH: CHART_HEIGHT, axisMode, show }), [
-    w,
-    h,
-    CHART_HEIGHT,
-    axisMode,
-    show,
-  ]);
+  const chartRemountKey = useMemo(() => JSON.stringify({ w, h, chartH: CHART_HEIGHT, axisMode, show }), [w, h, CHART_HEIGHT, axisMode, show]);
 
   const yTickFont = isMobile ? 11 : 13;
   const xTickFont = isMobile ? 11 : 12;
@@ -972,14 +826,9 @@ export default function App() {
     <div className="gsr-page">
       <style>{`
         :root{
-          --bg:#123a5a;
-          --panel:#f4efe7;
-          --gold:#b58b58;
-          --ink:#0b1b2a;
-          --pill:#ffffff;
-          --shadow: 0 16px 40px rgba(0,0,0,0.25);
-          --radius: 22px;
-          --ctrlH: 40px;
+          --bg:#123a5a; --panel:#f4efe7; --gold:#b58b58; --ink:#0b1b2a;
+          --pill:#ffffff; --shadow: 0 16px 40px rgba(0,0,0,0.25);
+          --radius: 22px; --ctrlH: 40px;
         }
         *{box-sizing:border-box}
         body{margin:0;background:var(--bg)}
@@ -993,13 +842,7 @@ export default function App() {
         .gsr-container{ max-width: 1600px; margin: 0 auto; }
 
         .gsr-header{ display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom: 18px; }
-        .gsr-title{
-          font-family: Georgia, "Times New Roman", Times, serif;
-          font-size: 56px;
-          margin:0;
-          letter-spacing:0.5px;
-          text-align:center;
-        }
+        .gsr-title{ font-family: Georgia, "Times New Roman", Times, serif; font-size: 56px; margin:0; letter-spacing:0.5px; text-align:center; }
         .gsr-title-underline{ width: 280px; height: 4px; background: var(--gold); border-radius: 999px; }
 
         .gsr-controls{
@@ -1009,12 +852,8 @@ export default function App() {
           align-items:end;
           margin-bottom: 14px;
         }
-        @media (max-width: 1200px){
-          .gsr-controls{ grid-template-columns: 1fr 1fr; gap: 12px; }
-        }
-        @media (max-width: 520px){
-          .gsr-controls{ grid-template-columns: 1fr; }
-        }
+        @media (max-width: 1200px){ .gsr-controls{ grid-template-columns: 1fr 1fr; gap: 12px; } }
+        @media (max-width: 520px){ .gsr-controls{ grid-template-columns: 1fr; } }
 
         .gsr-control{display:flex; flex-direction:column; gap:6px; min-width:0;}
         .gsr-label{ font-size: 13px; color: rgba(255,255,255,0.75); font-weight: 800; text-align:center; }
@@ -1086,51 +925,26 @@ export default function App() {
         .gsr-stepper{ position: relative; width: 100%; }
         .gsr-stepperInput{ padding-right: 14px; }
         .gsr-stepperBtns{
-          position:absolute;
-          right: 10px;
-          top: 50%;
-          transform: translateY(-50%);
-          display: none;
-          flex-direction: column;
-          gap: 4px;
-          z-index: 2;
+          position:absolute; right: 10px; top: 50%; transform: translateY(-50%);
+          display: none; flex-direction: column; gap: 4px; z-index: 2;
         }
         .gsr-stepBtn{
-          width: 26px;
-          height: 16px;
-          border-radius: 10px;
-          border: 0;
-          background: rgba(11,27,42,0.10);
-          color: #0b1b2a;
-          font-weight: 1000;
-          font-size: 11px;
-          line-height: 16px;
-          cursor: pointer;
-          padding: 0;
-          display:flex;
-          align-items:center;
-          justify-content:center;
+          width: 26px; height: 16px; border-radius: 10px; border: 0;
+          background: rgba(11,27,42,0.10); color: #0b1b2a;
+          font-weight: 1000; font-size: 11px; line-height: 16px;
+          cursor: pointer; padding: 0; display:flex; align-items:center; justify-content:center;
           user-select:none;
         }
         .gsr-stepBtn:active{ transform: scale(0.98); }
         .gsr-stepper.is-mobile .gsr-stepperBtns{ display:flex; }
 
         .gsr-cards{
-          display:grid;
-          grid-template-columns: 360px 1fr;
-          gap: 16px;
-          margin-bottom: 12px;
-          align-items: stretch;
+          display:grid; grid-template-columns: 360px 1fr;
+          gap: 16px; margin-bottom: 12px; align-items: stretch;
         }
-        @media (max-width: 1200px){
-          .gsr-cards{grid-template-columns: 1fr;}
-        }
+        @media (max-width: 1200px){ .gsr-cards{grid-template-columns: 1fr;} }
 
-        .gsr-leftStack{
-          display:grid;
-          grid-template-rows: 1fr 1fr;
-          gap: 16px;
-        }
+        .gsr-leftStack{ display:grid; grid-template-rows: 1fr 1fr; gap: 16px; }
 
         .gsr-card{
           background: var(--gold);
@@ -1139,48 +953,23 @@ export default function App() {
           padding: 16px 16px 14px;
           min-height: 190px;
         }
-        .gsr-cardTitle{
-          font-family: Georgia, "Times New Roman", Times, serif;
-          font-size: 42px;
-          margin: 0 0 6px 0;
-          color: rgba(255,255,255,0.95);
-        }
-        .gsr-cardValue{
-          font-family: Georgia, "Times New Roman", Times, serif;
-          font-size: 28px;
-          font-weight: 900;
-          color: #fff3d9;
-          margin-bottom: 10px;
-        }
-        .gsr-cardInner{
-          background: var(--panel);
-          border-radius: 14px;
-          padding: 12px 12px;
-          color: var(--ink);
-          font-weight: 900;
-        }
+        .gsr-cardTitle{ font-family: Georgia, "Times New Roman", Times, serif; font-size: 42px; margin: 0 0 6px 0; color: rgba(255,255,255,0.95); }
+        .gsr-cardValue{ font-family: Georgia, "Times New Roman", Times, serif; font-size: 28px; font-weight: 900; color: #fff3d9; margin-bottom: 10px; }
+        .gsr-cardInner{ background: var(--panel); border-radius: 14px; padding: 12px 12px; color: var(--ink); font-weight: 900; }
 
         .gsr-twoLine{ display:flex; flex-direction:column; gap:8px; }
         .gsr-row{ display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
         .gsr-muted{ color:#486076; font-weight: 900; display:inline-flex; align-items:center; }
         .gsr-strong{ color:#0b1b2a; font-weight: 1000; }
 
-        .gsr-card--portfolio{
-          min-height: 100%;
-          padding: 18px 18px 16px;
-        }
+        .gsr-card--portfolio{ min-height: 100%; padding: 18px 18px 16px; }
         .gsr-card--portfolio .gsr-cardTitle{ font-size: 52px; }
         .gsr-card--portfolio .gsr-cardValue{ font-size: 38px; }
-        .gsr-card--portfolio .gsr-cardInner{
-          font-size: 18px;
-          padding: 16px 16px;
-        }
+        .gsr-card--portfolio .gsr-cardInner{ font-size: 18px; padding: 16px 16px; }
+
         .gsr-portfolioGrid{
-          display:grid;
-          grid-template-columns: 1fr 1fr;
-          column-gap: 20px;
-          row-gap: 10px;
-          align-items:baseline;
+          display:grid; grid-template-columns: 1fr 1fr;
+          column-gap: 20px; row-gap: 10px; align-items:baseline;
         }
         .gsr-portfolioGrid .right{ text-align:right; }
 
@@ -1192,30 +981,10 @@ export default function App() {
           box-shadow: var(--shadow);
           padding: 10px 12px 12px;
         }
-        .gsr-chartTop{
-          display:flex;
-          justify-content:flex-end;
-          gap: 14px;
-          padding: 6px 6px 8px;
-          flex-wrap: wrap;
-        }
-        .gsr-toggle{
-          display:flex; align-items:center; gap:6px;
-          color: #0b1b2a;
-          font-weight: 1000;
-          user-select:none;
-          white-space:nowrap;
-          font-size: 14px;
-        }
+        .gsr-chartTop{ display:flex; justify-content:flex-end; gap: 14px; padding: 6px 6px 8px; flex-wrap: wrap; }
+        .gsr-toggle{ display:flex; align-items:center; gap:6px; color: #0b1b2a; font-weight: 1000; user-select:none; white-space:nowrap; font-size: 14px; }
         .gsr-dot{ width: 11px; height: 11px; border-radius: 999px; display:inline-block; }
-        .gsr-chartInner{
-          width: 100%;
-          height: ${CHART_HEIGHT}px;
-          max-height: 90dvh;
-          display:flex;
-          align-items:center;
-          justify-content:center;
-        }
+        .gsr-chartInner{ width: 100%; height: ${CHART_HEIGHT}px; max-height: 90dvh; display:flex; align-items:center; justify-content:center; }
 
         .gsr-tipWrap{ position: relative; display:inline-flex; align-items:center; margin-left: 6px; }
         .gsr-tipBtn{
@@ -1228,8 +997,7 @@ export default function App() {
         .gsr-tipBubble{
           position:absolute; z-index: 50;
           bottom: calc(100% + 10px);
-          left: 50%;
-          transform: translateX(-50%);
+          left: 50%; transform: translateX(-50%);
           background: rgba(255,255,255,0.98);
           color: #0b1b2a;
           border-radius: 12px;
@@ -1266,11 +1034,7 @@ export default function App() {
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
-            <select
-              className="gsr-pill gsr-pillSelect gsr-pill--small"
-              value={startMetal}
-              onChange={(e) => setStartMetal(e.target.value)}
-            >
+            <select className="gsr-pill gsr-pillSelect gsr-pill--small" value={startMetal} onChange={(e) => setStartMetal(e.target.value)}>
               <option value="gold">Gold</option>
               <option value="silver">Silver</option>
             </select>
@@ -1313,7 +1077,7 @@ export default function App() {
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip id="silver_change" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Change in value (USD) for the selected period." />
+                      <InfoTip id="silver_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmtMoney0(stats.schgC)}</span>
                   </div>
@@ -1406,9 +1170,7 @@ export default function App() {
 
                 <XAxis
                   dataKey="date"
-                  tickFormatter={(d) =>
-                    d instanceof Date ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" }) : d
-                  }
+                  tickFormatter={(d) => (d instanceof Date ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" }) : d)}
                   minTickGap={18}
                   tickMargin={10}
                   padding={{ left: 6, right: 6 }}
@@ -1424,13 +1186,9 @@ export default function App() {
                   tick={{ fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={leftDomain}
+                  domain={leftIsRatio ? ratioDomain : usdDomain}
                   tickFormatter={(v) => fmt0(Number(v))}
-                  label={
-                    !SHOW_AXIS_LABELS
-                      ? undefined
-                      : { value: leftLabel, angle: -90, position: "insideLeft", fill: AXIS_COLOR, fontWeight: 900 }
-                  }
+                  label={!SHOW_AXIS_LABELS ? undefined : { value: leftLabel, angle: -90, position: "insideLeft", fill: AXIS_COLOR, fontWeight: 900 }}
                 />
 
                 <YAxis
@@ -1442,13 +1200,9 @@ export default function App() {
                   tick={{ fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={rightDomain}
+                  domain={rightIsRatio ? ratioDomain : usdDomain}
                   tickFormatter={(v) => fmt0(Number(v))}
-                  label={
-                    !SHOW_AXIS_LABELS
-                      ? undefined
-                      : { value: rightLabel, angle: 90, position: "insideRight", fill: AXIS_COLOR, fontWeight: 900 }
-                  }
+                  label={!SHOW_AXIS_LABELS ? undefined : { value: rightLabel, angle: 90, position: "insideRight", fill: AXIS_COLOR, fontWeight: 900 }}
                 />
 
                 <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
