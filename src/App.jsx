@@ -43,6 +43,14 @@ const fmt0 = (n) =>
     ? Math.round(n).toLocaleString("en-GB", { maximumFractionDigits: 0 })
     : "0";
 
+const fmtInt = (n) => {
+  const x = typeof n === "bigint" ? n : BigInt(Math.trunc(n || 0));
+  // Convert to JS number for locale formatting when safe; fallback to string for huge values.
+  const abs = x < 0n ? -x : x;
+  if (abs <= 9_000_000_000_000_000n) return Number(x).toLocaleString("en-GB");
+  return x.toString();
+};
+
 const pad2 = (n) => String(n).padStart(2, "0");
 const toIsoLocal = (d) =>
   `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
@@ -77,61 +85,65 @@ const parseIntOrNull = (s) => {
   return Number.isFinite(n) ? n : null;
 };
 
+/* ----------------- UNIVERSAL ROUNDING (BigInt fixed-point) ----------------- */
 /**
- * ✅ Deterministic rounding across engines (Chrome/V8 vs iOS Safari/JSC).
- * We quantize key intermediate values so the final Math.round is identical.
+ * We do all money arithmetic deterministically with integers:
+ * - Prices are stored as micro-USD (USD * 1,000,000) => BigInt
+ * - Amount/value are stored as cents (USD * 100) => BigInt
+ * - Ounces are stored as OZ_SCALE (1e12) => BigInt
+ *
+ * This removes floating-point differences between JS engines (Safari vs Chrome).
  */
-const q = (n, dp = 12) => (Number.isFinite(n) ? Number(Number(n).toFixed(dp)) : n);
+const PRICE_SCALE = 1_000_000n; // micro USD
+const CENTS_TO_MICRO = 10_000n; // 1 cent = 0.01 USD = 10,000 micro USD
+const OZ_SCALE = 1_000_000_000_000n; // 1e12
 
-function niceTicks(min, max, target = 7) {
-  if (!Number.isFinite(min) || !Number.isFinite(max))
-    return { domain: ["auto", "auto"], ticks: undefined };
+const bi = (x) => BigInt(x);
 
-  if (min === max) {
-    const a = min - 1;
-    const b = max + 1;
-    return { domain: [a, b], ticks: [a, min, b] };
-  }
+const divRoundHalfUp = (num, den) => {
+  if (den === 0n) return 0n;
+  // half-up: (n + d/2) / d, handling sign
+  const sign = (num < 0n) !== (den < 0n) ? -1n : 1n;
+  const a = num < 0n ? -num : num;
+  const b = den < 0n ? -den : den;
+  const q = (a + b / 2n) / b;
+  return sign * q;
+};
 
-  const range = max - min;
-  const roughStep = range / Math.max(2, target - 1);
-  const pow10 = Math.pow(10, Math.floor(Math.log10(roughStep)));
-  const candidates = [1, 2, 2.5, 5, 10].map((m) => m * pow10);
-  const step = candidates.reduce(
-    (best, s) => (Math.abs(s - roughStep) < Math.abs(best - roughStep) ? s : best),
-    candidates[0]
-  );
+const toPriceMicro = (priceNumber) => {
+  if (!Number.isFinite(priceNumber)) return null;
+  // 6dp micro-USD integer string, deterministic
+  const s = Number(priceNumber).toFixed(6); // e.g. "3583.123456"
+  const neg = s.startsWith("-");
+  const t = neg ? s.slice(1) : s;
+  const [a, b = ""] = t.split(".");
+  const frac = (b + "000000").slice(0, 6);
+  const out = bi(a) * PRICE_SCALE + bi(frac);
+  return neg ? -out : out;
+};
 
-  const niceMin = Math.floor(min / step) * step;
-  const niceMax = Math.ceil(max / step) * step;
+const centsToMicro = (cents) => bi(cents) * CENTS_TO_MICRO;
 
-  const ticks = [];
-  for (let v = niceMin; v <= niceMax + step / 2; v += step) ticks.push(v);
-  return { domain: [niceMin, niceMax], ticks };
-}
+const microToCents = (micro) => divRoundHalfUp(micro, CENTS_TO_MICRO);
 
-function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
-  if (!Number.isFinite(min) || !Number.isFinite(max))
-    return { domain: ["auto", "auto"], ticks: undefined };
+const usdCentsToOuncesScaled = (usdCents, priceMicro) => {
+  // oz_scaled = usd_micro * OZ_SCALE / price_micro
+  const usdMicro = centsToMicro(usdCents);
+  return divRoundHalfUp(usdMicro * OZ_SCALE, priceMicro);
+};
 
-  if (min === max) {
-    const a = min - 1;
-    const b = max + 1;
-    return { domain: [a, b], ticks: [a, min, b] };
-  }
+const ouncesScaledToUsdCents = (ozScaled, priceMicro) => {
+  // usd_micro = oz_scaled * price_micro / OZ_SCALE
+  const usdMicro = divRoundHalfUp(ozScaled * priceMicro, OZ_SCALE);
+  return microToCents(usdMicro);
+};
 
-  const range = max - min;
-  const pad = range * padFrac;
+const applyFee97pct = (usdCents) => {
+  // half-up rounding: cents * 97 / 100
+  return divRoundHalfUp(bi(usdCents) * 97n, 100n);
+};
 
-  let paddedMin = min - pad * 0.25;
-  let paddedMax = max + pad;
-
-  if (clampMinToZero) paddedMin = Math.max(0, paddedMin);
-
-  return niceTicks(paddedMin, paddedMax, target);
-}
-
-/* ---- CSV-first; API only to top-up the latest day ---- */
+/* ----------------- CSV-first; API only to top-up the latest day ---- */
 async function fetchCSVText() {
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
   const candidates = ["prices.csv", "data/prices.csv", `${base}prices.csv`, `${base}data/prices.csv`];
@@ -289,7 +301,7 @@ function InfoTip({ id, activeId, setActiveId, text }) {
         aria-expanded={open}
         onPointerDown={(e) => {
           touchedRef.current = true;
-          e.stopPropagation(); // prevent global close
+          e.stopPropagation();
         }}
         onClick={(e) => {
           e.stopPropagation();
@@ -523,7 +535,6 @@ export default function App() {
 
   const [activeTipId, setActiveTipId] = useState(null);
 
-  // ✅ click anywhere else closes current tooltip (tap-friendly)
   useEffect(() => {
     const close = () => setActiveTipId(null);
     document.addEventListener("pointerdown", close);
@@ -694,31 +705,57 @@ export default function App() {
     return rows.filter((r) => r.date >= start && r.date <= end);
   }, [rows, startIsoAdj, endIsoAdj]);
 
+  /**
+   * ✅ Universal money convention:
+   * - derive ounces (scaled) once from start day and amount cents
+   * - compute daily values in cents from integer math
+   */
   const valuedRows = useMemo(() => {
     if (!windowed.length) return [];
+
     const start = windowed[0];
+    const goldMicro0 = toPriceMicro(start.gold);
+    const silverMicro0 = toPriceMicro(start.silver);
+    if (!goldMicro0 || !silverMicro0) return [];
 
-    const goldOzBH = amount > 0 && start.gold > 0 ? q(amount / start.gold, 12) : 0;
-    const silverOzBH = amount > 0 && start.silver > 0 ? q(amount / start.silver, 12) : 0;
+    const amountCents = bi(amount) * 100n;
 
-    return windowed.map((r) => ({
-      ...r,
-      goldValue: q(goldOzBH * r.gold, 10),
-      silverValue: q(silverOzBH * r.silver, 10),
-    }));
+    const goldOzScaledBH = amount > 0 && start.gold > 0 ? usdCentsToOuncesScaled(amountCents, goldMicro0) : 0n;
+    const silverOzScaledBH = amount > 0 && start.silver > 0 ? usdCentsToOuncesScaled(amountCents, silverMicro0) : 0n;
+
+    return windowed.map((r) => {
+      const gMicro = toPriceMicro(r.gold);
+      const sMicro = toPriceMicro(r.silver);
+      if (!gMicro || !sMicro) return null;
+
+      const goldValueCents = ouncesScaledToUsdCents(goldOzScaledBH, gMicro);
+      const silverValueCents = ouncesScaledToUsdCents(silverOzScaledBH, sMicro);
+
+      return {
+        ...r,
+        goldMicro: gMicro,
+        silverMicro: sMicro,
+        goldValueCents,
+        silverValueCents,
+        goldValue: Number(goldValueCents) / 100,
+        silverValue: Number(silverValueCents) / 100,
+      };
+    }).filter(Boolean);
   }, [windowed, amount]);
 
   const withStrategy = useMemo(() => {
     if (!valuedRows.length) return { data: [], endsIn: "gold" };
 
+    const amountCents = bi(amount) * 100n;
+
     let metal = startMetal === "silver" ? "silver" : "gold";
     const first = valuedRows[0];
 
-    let ozGold = 0;
-    let ozSilver = 0;
+    let ozGoldScaled = 0n;
+    let ozSilverScaled = 0n;
 
-    if (metal === "gold") ozGold = q(amount / first.gold, 12);
-    else ozSilver = q(amount / first.silver, 12);
+    if (metal === "gold") ozGoldScaled = usdCentsToOuncesScaled(amountCents, first.goldMicro);
+    else ozSilverScaled = usdCentsToOuncesScaled(amountCents, first.silverMicro);
 
     let switchesCount = 0;
 
@@ -729,22 +766,34 @@ export default function App() {
         const down = Number.isFinite(s2g) && prev.gsr > s2g && r.gsr <= s2g;
 
         if (metal === "gold" && up) {
-          const usd = q(ozGold * r.gold, 10);
-          ozGold = 0;
-          ozSilver = q((usd / r.silver) * 0.97, 12);
+          const usdCents = ouncesScaledToUsdCents(ozGoldScaled, r.goldMicro);
+          const afterFee = applyFee97pct(usdCents);
+          ozGoldScaled = 0n;
+          ozSilverScaled = usdCentsToOuncesScaled(afterFee, r.silverMicro);
           metal = "silver";
           switchesCount++;
         } else if (metal === "silver" && down) {
-          const usd = q(ozSilver * r.silver, 10);
-          ozSilver = 0;
-          ozGold = q((usd / r.gold) * 0.97, 12);
+          const usdCents = ouncesScaledToUsdCents(ozSilverScaled, r.silverMicro);
+          const afterFee = applyFee97pct(usdCents);
+          ozSilverScaled = 0n;
+          ozGoldScaled = usdCentsToOuncesScaled(afterFee, r.goldMicro);
           metal = "gold";
           switchesCount++;
         }
       }
 
-      const strat = metal === "gold" ? q(ozGold * r.gold, 10) : q(ozSilver * r.silver, 10);
-      return { ...r, strat, switches: switchesCount, stratMetal: metal };
+      const stratCents =
+        metal === "gold"
+          ? ouncesScaledToUsdCents(ozGoldScaled, r.goldMicro)
+          : ouncesScaledToUsdCents(ozSilverScaled, r.silverMicro);
+
+      return {
+        ...r,
+        stratCents,
+        strat: Number(stratCents) / 100,
+        switches: switchesCount,
+        stratMetal: metal,
+      };
     });
 
     const endsIn = out[out.length - 1]?.stratMetal || metal;
@@ -771,14 +820,16 @@ export default function App() {
   }, [startIsoAdj, endIsoAdj]);
 
   const stats = useMemo(() => {
+    const amountCents = bi(amount) * 100n;
+
     if (!data.length) {
       return {
-        gv: amount,
-        sv: amount,
-        pv: amount,
-        gchg: 0,
-        schg: 0,
-        pchg: 0,
+        gvC: amountCents,
+        svC: amountCents,
+        pvC: amountCents,
+        gchgC: 0n,
+        schgC: 0n,
+        pchgC: 0n,
         gpct: 0,
         spct: 0,
         ppct: 0,
@@ -792,49 +843,57 @@ export default function App() {
     }
 
     const end = data[data.length - 1];
-    const gv = end.goldValue ?? amount;
-    const sv = end.silverValue ?? amount;
-    const pv = end.strat ?? amount;
 
-    const gchg = q(gv - amount, 10);
-    const schg = q(sv - amount, 10);
-    const pchg = q(pv - amount, 10);
+    const gvC = end.goldValueCents ?? amountCents;
+    const svC = end.silverValueCents ?? amountCents;
+    const pvC = end.stratCents ?? amountCents;
 
-    const gpct = amount > 0 ? q((gv / amount - 1) * 100, 10) : 0;
-    const spct = amount > 0 ? q((sv / amount - 1) * 100, 10) : 0;
-    const ppct = amount > 0 ? q((pv / amount - 1) * 100, 10) : 0;
+    const gchgC = gvC - amountCents;
+    const schgC = svC - amountCents;
+    const pchgC = pvC - amountCents;
 
-    const diffPg = q(ppct - gpct, 10);
-    const diffPs = q(ppct - spct, 10);
+    // Percentages: keep as Number but derived from deterministic cents
+    const gv = Number(gvC) / 100;
+    const sv = Number(svC) / 100;
+    const pv = Number(pvC) / 100;
+    const amt = amount;
+
+    const gpct = amt > 0 ? (gv / amt - 1) * 100 : 0;
+    const spct = amt > 0 ? (sv / amt - 1) * 100 : 0;
+    const ppct = amt > 0 ? (pv / amt - 1) * 100 : 0;
+
+    const diffPg = ppct - gpct;
+    const diffPs = ppct - spct;
 
     let totalG = 0,
       winsG = 0;
     let totalS = 0,
       winsS = 0;
+
     for (const r of data) {
-      if (r.strat != null && r.goldValue != null) {
+      if (r.stratCents != null && r.goldValueCents != null) {
         totalG++;
-        if (r.strat > r.goldValue) winsG++;
+        if (r.stratCents > r.goldValueCents) winsG++;
       }
-      if (r.strat != null && r.silverValue != null) {
+      if (r.stratCents != null && r.silverValueCents != null) {
         totalS++;
-        if (r.strat > r.silverValue) winsS++;
+        if (r.stratCents > r.silverValueCents) winsS++;
       }
     }
 
-    const pBeatsG = totalG ? q((winsG / totalG) * 100, 10) : 0;
-    const pBeatsS = totalS ? q((winsS / totalS) * 100, 10) : 0;
+    const pBeatsG = totalG ? (winsG / totalG) * 100 : 0;
+    const pBeatsS = totalS ? (winsS / totalS) * 100 : 0;
 
     const switches = end.switches ?? 0;
     const endsIn = (withStrategy.endsIn || "gold").toUpperCase();
 
     return {
-      gv,
-      sv,
-      pv,
-      gchg,
-      schg,
-      pchg,
+      gvC,
+      svC,
+      pvC,
+      gchgC,
+      schgC,
+      pchgC,
       gpct,
       spct,
       ppct,
@@ -846,6 +905,20 @@ export default function App() {
       endsIn,
     };
   }, [data, amount, withStrategy.endsIn]);
+
+  const anyUsdOn = show.gold || show.silver || show.strat;
+  const gsrOn = show.gsr;
+
+  const axisMode =
+    !anyUsdOn && !gsrOn
+      ? "NONE"
+      : gsrOn && !anyUsdOn
+      ? "RATIO_BOTH"
+      : !gsrOn && anyUsdOn
+      ? "USD_BOTH"
+      : "MIXED";
+
+  const hideAxisText = axisMode === "NONE";
 
   const { usdDomain, usdTicks } = useMemo(() => {
     if (!data.length) return { usdDomain: ["auto", "auto"], usdTicks: undefined };
@@ -871,7 +944,43 @@ export default function App() {
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { usdDomain: ["auto", "auto"], usdTicks: undefined };
 
-    const out = niceTicksWithPadding(min, max, 7, 0.06, true);
+    // keep existing nice ticks logic (display-only)
+    const out = (function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
+      if (!Number.isFinite(min) || !Number.isFinite(max))
+        return { domain: ["auto", "auto"], ticks: undefined };
+
+      if (min === max) {
+        const a = min - 1;
+        const b = max + 1;
+        return { domain: [a, b], ticks: [a, min, b] };
+      }
+
+      const range = max - min;
+      const pad = range * padFrac;
+
+      let paddedMin = min - pad * 0.25;
+      let paddedMax = max + pad;
+
+      if (clampMinToZero) paddedMin = Math.max(0, paddedMin);
+
+      // niceTicks
+      const range2 = paddedMax - paddedMin;
+      const roughStep = range2 / Math.max(2, target - 1);
+      const pow10 = Math.pow(10, Math.floor(Math.log10(roughStep)));
+      const candidates = [1, 2, 2.5, 5, 10].map((m) => m * pow10);
+      const step = candidates.reduce(
+        (best, s) => (Math.abs(s - roughStep) < Math.abs(best - roughStep) ? s : best),
+        candidates[0]
+      );
+
+      const niceMin = Math.floor(paddedMin / step) * step;
+      const niceMax = Math.ceil(paddedMax / step) * step;
+
+      const ticks = [];
+      for (let v = niceMin; v <= niceMax + step / 2; v += step) ticks.push(v);
+      return { domain: [niceMin, niceMax], ticks };
+    })(min, max, 7, 0.06, true);
+
     return { usdDomain: out.domain, usdTicks: out.ticks };
   }, [data, show]);
 
@@ -891,23 +1000,43 @@ export default function App() {
     if (!Number.isFinite(min) || !Number.isFinite(max))
       return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
 
-    const out = niceTicksWithPadding(min, max, 7, 0.06, false);
+    const out = (function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
+      if (!Number.isFinite(min) || !Number.isFinite(max))
+        return { domain: ["auto", "auto"], ticks: undefined };
+
+      if (min === max) {
+        const a = min - 1;
+        const b = max + 1;
+        return { domain: [a, b], ticks: [a, min, b] };
+      }
+
+      const range = max - min;
+      const pad = range * padFrac;
+
+      let paddedMin = min - pad * 0.25;
+      let paddedMax = max + pad;
+
+      if (clampMinToZero) paddedMin = Math.max(0, paddedMin);
+
+      const range2 = paddedMax - paddedMin;
+      const roughStep = range2 / Math.max(2, target - 1);
+      const pow10 = Math.pow(10, Math.floor(Math.log10(roughStep)));
+      const candidates = [1, 2, 2.5, 5, 10].map((m) => m * pow10);
+      const step = candidates.reduce(
+        (best, s) => (Math.abs(s - roughStep) < Math.abs(best - roughStep) ? s : best),
+        candidates[0]
+      );
+
+      const niceMin = Math.floor(paddedMin / step) * step;
+      const niceMax = Math.ceil(paddedMax / step) * step;
+
+      const ticks = [];
+      for (let v = niceMin; v <= niceMax + step / 2; v += step) ticks.push(v);
+      return { domain: [niceMin, niceMax], ticks };
+    })(min, max, 7, 0.06, false);
+
     return { ratioDomain: out.domain, ratioTicks: out.ticks };
   }, [data]);
-
-  const anyUsdOn = show.gold || show.silver || show.strat;
-  const gsrOn = show.gsr;
-
-  const axisMode =
-    !anyUsdOn && !gsrOn
-      ? "NONE"
-      : gsrOn && !anyUsdOn
-      ? "RATIO_BOTH"
-      : !gsrOn && anyUsdOn
-      ? "USD_BOTH"
-      : "MIXED";
-
-  const hideAxisText = axisMode === "NONE";
 
   const leftIsRatio = axisMode === "MIXED" || axisMode === "RATIO_BOTH";
   const rightIsRatio = axisMode === "RATIO_BOTH";
@@ -1066,7 +1195,7 @@ export default function App() {
 
         /* stepper */
         .gsr-stepper{ position: relative; width: 100%; }
-        .gsr-stepperInput{ padding-right: 14px; } /* keep centered */
+        .gsr-stepperInput{ padding-right: 14px; }
         .gsr-stepperBtns{
           position:absolute;
           right: 10px;
@@ -1285,7 +1414,7 @@ export default function App() {
           <div className="gsr-leftStack">
             <div className="gsr-card">
               <div className="gsr-cardTitle">Gold</div>
-              <div className="gsr-cardValue">${fmt0(stats.gv)}</div>
+              <div className="gsr-cardValue">${fmtInt(stats.gvC / 100n)}</div>
               <div className="gsr-cardInner">
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
@@ -1298,7 +1427,7 @@ export default function App() {
                         text="Change in value (USD) for the selected period."
                       />
                     </span>
-                    <span className="gsr-strong">${fmt0(stats.gchg)}</span>
+                    <span className="gsr-strong">${fmtInt(stats.gchgC / 100n)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
@@ -1318,7 +1447,7 @@ export default function App() {
 
             <div className="gsr-card">
               <div className="gsr-cardTitle">Silver</div>
-              <div className="gsr-cardValue">${fmt0(stats.sv)}</div>
+              <div className="gsr-cardValue">${fmtInt(stats.svC / 100n)}</div>
               <div className="gsr-cardInner">
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
@@ -1331,7 +1460,7 @@ export default function App() {
                         text="Change in value (USD) for the selected period."
                       />
                     </span>
-                    <span className="gsr-strong">${fmt0(stats.schg)}</span>
+                    <span className="gsr-strong">${fmtInt(stats.schgC / 100n)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
@@ -1352,7 +1481,7 @@ export default function App() {
 
           <div className="gsr-card gsr-card--portfolio">
             <div className="gsr-cardTitle">My Portfolio</div>
-            <div className="gsr-cardValue">${fmt0(stats.pv)}</div>
+            <div className="gsr-cardValue">${fmtInt(stats.pvC / 100n)}</div>
 
             <div className="gsr-cardInner">
               <div className="gsr-portfolioGrid">
@@ -1366,7 +1495,7 @@ export default function App() {
                   />
                 </div>
                 <div className="right gsr-strong">
-                  ${fmt0(stats.pchg)} | {fmt0(stats.ppct)}%
+                  ${fmtInt(stats.pchgC / 100n)} | {fmt0(stats.ppct)}%
                 </div>
 
                 <div className="gsr-muted">
