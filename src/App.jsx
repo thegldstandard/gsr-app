@@ -77,6 +77,12 @@ const parseIntOrNull = (s) => {
   return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * ✅ Deterministic rounding across engines (Chrome/V8 vs iOS Safari/JSC).
+ * We quantize key intermediate values so the final Math.round is identical.
+ */
+const q = (n, dp = 12) => (Number.isFinite(n) ? Number(Number(n).toFixed(dp)) : n);
+
 function niceTicks(min, max, target = 7) {
   if (!Number.isFinite(min) || !Number.isFinite(max))
     return { domain: ["auto", "auto"], ticks: undefined };
@@ -283,7 +289,7 @@ function InfoTip({ id, activeId, setActiveId, text }) {
         aria-expanded={open}
         onPointerDown={(e) => {
           touchedRef.current = true;
-          e.stopPropagation();
+          e.stopPropagation(); // prevent global close
         }}
         onClick={(e) => {
           e.stopPropagation();
@@ -384,7 +390,7 @@ function CurrencyInput({ value, onChange, className = "" }) {
   return <input className={`gsr-pill ${className}`} inputMode="numeric" value={txt} onChange={handleChange} />;
 }
 
-/* ----------------- Ratio input: centered text + right-side arrows on mobile ----------------- */
+/* ----------------- Ratio input: blank allowed + mobile arrows on right ----------------- */
 function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 999, step = 1 }) {
   const sanitize = (raw) => raw.replace(/[^\d]/g, "").slice(0, 4);
 
@@ -411,10 +417,10 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
       <div className={`gsr-stepper ${isMobile ? "is-mobile" : ""}`}>
         <input
           className="gsr-pill gsr-pill--small gsr-stepperInput"
-          type="number"            /* desktop spinners still work */
+          type="number"
           inputMode="numeric"
           step={step}
-          value={valueText}        /* allows "" */
+          value={valueText}
           onChange={(e) => {
             const raw = e.target.value;
             if (raw === "") {
@@ -432,7 +438,6 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
           }}
         />
 
-        {/* mobile-only overlay on the RIGHT */}
         <div className="gsr-stepperBtns" aria-hidden={!isMobile}>
           <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)} tabIndex={isMobile ? 0 : -1}>
             ▲
@@ -518,6 +523,7 @@ export default function App() {
 
   const [activeTipId, setActiveTipId] = useState(null);
 
+  // ✅ click anywhere else closes current tooltip (tap-friendly)
   useEffect(() => {
     const close = () => setActiveTipId(null);
     document.addEventListener("pointerdown", close);
@@ -547,6 +553,7 @@ export default function App() {
     return n == null ? null : clampInt(n, 0, 999);
   }, [s2gText]);
 
+  /* ================= MANUAL AXIS SETTINGS ================= */
   const AXIS_COLOR = "#0b1b2a";
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
   const SHOW_AXIS_LABELS = !isMobile;
@@ -690,13 +697,14 @@ export default function App() {
   const valuedRows = useMemo(() => {
     if (!windowed.length) return [];
     const start = windowed[0];
-    const goldOzBH = amount > 0 && start.gold > 0 ? amount / start.gold : 0;
-    const silverOzBH = amount > 0 && start.silver > 0 ? amount / start.silver : 0;
+
+    const goldOzBH = amount > 0 && start.gold > 0 ? q(amount / start.gold, 12) : 0;
+    const silverOzBH = amount > 0 && start.silver > 0 ? q(amount / start.silver, 12) : 0;
 
     return windowed.map((r) => ({
       ...r,
-      goldValue: goldOzBH * r.gold,
-      silverValue: silverOzBH * r.silver,
+      goldValue: q(goldOzBH * r.gold, 10),
+      silverValue: q(silverOzBH * r.silver, 10),
     }));
   }, [windowed, amount]);
 
@@ -709,34 +717,33 @@ export default function App() {
     let ozGold = 0;
     let ozSilver = 0;
 
-    if (metal === "gold") ozGold = amount / first.gold;
-    else ozSilver = amount / first.silver;
+    if (metal === "gold") ozGold = q(amount / first.gold, 12);
+    else ozSilver = q(amount / first.silver, 12);
 
     let switchesCount = 0;
 
     const out = valuedRows.map((r, idx) => {
       if (idx > 0) {
         const prev = valuedRows[idx - 1];
-
         const up = Number.isFinite(g2s) && prev.gsr < g2s && r.gsr >= g2s;
         const down = Number.isFinite(s2g) && prev.gsr > s2g && r.gsr <= s2g;
 
         if (metal === "gold" && up) {
-          const usd = ozGold * r.gold;
+          const usd = q(ozGold * r.gold, 10);
           ozGold = 0;
-          ozSilver = (usd / r.silver) * 0.97;
+          ozSilver = q((usd / r.silver) * 0.97, 12);
           metal = "silver";
           switchesCount++;
         } else if (metal === "silver" && down) {
-          const usd = ozSilver * r.silver;
+          const usd = q(ozSilver * r.silver, 10);
           ozSilver = 0;
-          ozGold = (usd / r.gold) * 0.97;
+          ozGold = q((usd / r.gold) * 0.97, 12);
           metal = "gold";
           switchesCount++;
         }
       }
 
-      const strat = metal === "gold" ? ozGold * r.gold : ozSilver * r.silver;
+      const strat = metal === "gold" ? q(ozGold * r.gold, 10) : q(ozSilver * r.silver, 10);
       return { ...r, strat, switches: switchesCount, stratMetal: metal };
     });
 
@@ -789,16 +796,16 @@ export default function App() {
     const sv = end.silverValue ?? amount;
     const pv = end.strat ?? amount;
 
-    const gchg = gv - amount;
-    const schg = sv - amount;
-    const pchg = pv - amount;
+    const gchg = q(gv - amount, 10);
+    const schg = q(sv - amount, 10);
+    const pchg = q(pv - amount, 10);
 
-    const gpct = amount > 0 ? (gv / amount - 1) * 100 : 0;
-    const spct = amount > 0 ? (sv / amount - 1) * 100 : 0;
-    const ppct = amount > 0 ? (pv / amount - 1) * 100 : 0;
+    const gpct = amount > 0 ? q((gv / amount - 1) * 100, 10) : 0;
+    const spct = amount > 0 ? q((sv / amount - 1) * 100, 10) : 0;
+    const ppct = amount > 0 ? q((pv / amount - 1) * 100, 10) : 0;
 
-    const diffPg = ppct - gpct;
-    const diffPs = ppct - spct;
+    const diffPg = q(ppct - gpct, 10);
+    const diffPs = q(ppct - spct, 10);
 
     let totalG = 0,
       winsG = 0;
@@ -815,8 +822,8 @@ export default function App() {
       }
     }
 
-    const pBeatsG = totalG ? (winsG / totalG) * 100 : 0;
-    const pBeatsS = totalS ? (winsS / totalS) * 100 : 0;
+    const pBeatsG = totalG ? q((winsG / totalG) * 100, 10) : 0;
+    const pBeatsS = totalS ? q((winsS / totalS) * 100, 10) : 0;
 
     const switches = end.switches ?? 0;
     const endsIn = (withStrategy.endsIn || "gold").toUpperCase();
@@ -917,13 +924,6 @@ export default function App() {
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
   const gsrAxisId = "leftAxis";
 
-  const usdHelperKey = useMemo(() => {
-    if (show.strat) return "strat";
-    if (show.gold) return "goldValue";
-    if (show.silver) return "silverValue";
-    return "goldValue";
-  }, [show.strat, show.gold, show.silver]);
-
   const axisKeyPart = useMemo(() => {
     return JSON.stringify({
       axisMode,
@@ -1011,7 +1011,7 @@ export default function App() {
           outline: none;
           font-weight: 900;
           min-width: 0;
-          text-align: center; /* ✅ keep number centered */
+          text-align: center;
           line-height: var(--ctrlH);
           font-size: 16px;
         }
@@ -1064,11 +1064,9 @@ export default function App() {
         .gsr-datePills--compact{ gap:6px; padding: 0 10px; }
         .is-compact .gsr-label{ font-size: 12px; }
 
-        /* ====== Stepper: arrows pinned on right, number stays centered ====== */
+        /* stepper */
         .gsr-stepper{ position: relative; width: 100%; }
-        /* remove the old padding-right trick so center is true center */
-        .gsr-stepperInput{ padding-right: 14px; }
-
+        .gsr-stepperInput{ padding-right: 14px; } /* keep centered */
         .gsr-stepperBtns{
           position:absolute;
           right: 10px;
@@ -1079,7 +1077,6 @@ export default function App() {
           gap: 4px;
           z-index: 2;
         }
-
         .gsr-stepBtn{
           width: 26px;
           height: 16px;
@@ -1098,14 +1095,7 @@ export default function App() {
           user-select:none;
         }
         .gsr-stepBtn:active{ transform: scale(0.98); }
-
         .gsr-stepper.is-mobile .gsr-stepperBtns{ display:flex; }
-
-        /* make sure buttons don't block text selection/cursor too much */
-        .gsr-stepper.is-mobile .gsr-stepperInput{
-          padding-right: 14px; /* keep same so text center doesn't shift */
-        }
-        /* ================================================================ */
 
         @media (max-width: 420px){
           .gsr-dateSeg{ width: 42px; font-size: 15px; }
@@ -1215,6 +1205,7 @@ export default function App() {
           justify-content:center;
         }
 
+        /* tooltip */
         .gsr-tipWrap{ position: relative; display:inline-flex; align-items:center; margin-left: 6px; }
         .gsr-tipBtn{
           width: 18px; height: 18px; border-radius: 999px; border: 0;
@@ -1257,6 +1248,7 @@ export default function App() {
           <div className="gsr-title-underline" />
         </header>
 
+        {/* controls */}
         <section className="gsr-controls">
           <div className="gsr-control">
             <span className="gsr-label">Initial Amount (USD)</span>
@@ -1302,7 +1294,7 @@ export default function App() {
                       <InfoTip
                         id="gold_change"
                         activeId={activeTipId}
-                        setActiveTipId={setActiveTipId}
+                        setActiveId={setActiveTipId}
                         text="Change in value (USD) for the selected period."
                       />
                     </span>
@@ -1314,7 +1306,7 @@ export default function App() {
                       <InfoTip
                         id="gold_return"
                         activeId={activeTipId}
-                        setActiveTipId={setActiveTipId}
+                        setActiveId={setActiveTipId}
                         text="Percentage return for the selected period."
                       />
                     </span>
@@ -1335,7 +1327,7 @@ export default function App() {
                       <InfoTip
                         id="silver_change"
                         activeId={activeTipId}
-                        setActiveTipId={setActiveTipId}
+                        setActiveId={setActiveTipId}
                         text="Change in value (USD) for the selected period."
                       />
                     </span>
@@ -1347,7 +1339,7 @@ export default function App() {
                       <InfoTip
                         id="silver_return"
                         activeId={activeTipId}
-                        setActiveTipId={setActiveTipId}
+                        setActiveId={setActiveTipId}
                         text="Percentage return for the selected period."
                       />
                     </span>
@@ -1369,7 +1361,7 @@ export default function App() {
                   <InfoTip
                     id="p_change"
                     activeId={activeTipId}
-                    setActiveTipId={setActiveTipId}
+                    setActiveId={setActiveTipId}
                     text="Change in value (USD) and percentage return for the selected period."
                   />
                 </div>
@@ -1382,7 +1374,7 @@ export default function App() {
                   <InfoTip
                     id="p_duration"
                     activeId={activeTipId}
-                    setActiveTipId={setActiveTipId}
+                    setActiveId={setActiveTipId}
                     text="Total time between your chosen start date and end date (years and months)."
                   />
                 </div>
@@ -1393,7 +1385,7 @@ export default function App() {
                   <InfoTip
                     id="p_beats_g"
                     activeId={activeTipId}
-                    setActiveTipId={setActiveTipId}
+                    setActiveId={setActiveTipId}
                     text="Percentage of days where My Portfolio value is higher than staying in Gold."
                   />
                 </div>
@@ -1404,7 +1396,7 @@ export default function App() {
                   <InfoTip
                     id="p_beats_s"
                     activeId={activeTipId}
-                    setActiveTipId={setActiveTipId}
+                    setActiveId={setActiveTipId}
                     text="Percentage of days where My Portfolio value is higher than staying in Silver."
                   />
                 </div>
@@ -1415,7 +1407,7 @@ export default function App() {
                   <InfoTip
                     id="p_vs_g"
                     activeId={activeTipId}
-                    setActiveTipId={setActiveTipId}
+                    setActiveId={setActiveTipId}
                     text="My Portfolio return minus Gold-only return (percentage points)."
                   />
                 </div>
@@ -1426,7 +1418,7 @@ export default function App() {
                   <InfoTip
                     id="p_vs_s"
                     activeId={activeTipId}
-                    setActiveTipId={setActiveTipId}
+                    setActiveId={setActiveTipId}
                     text="My Portfolio return minus Silver-only return (percentage points)."
                   />
                 </div>
@@ -1437,7 +1429,7 @@ export default function App() {
                   <InfoTip
                     id="p_switches"
                     activeId={activeTipId}
-                    setActiveTipId={setActiveTipId}
+                    setActiveId={setActiveTipId}
                     text="Number of switches between Gold and Silver based on your thresholds."
                   />
                 </div>
@@ -1496,6 +1488,7 @@ export default function App() {
             <ResponsiveContainer width="100%" height="100%" debounce={0} key={chartRemountKey}>
               <LineChart data={data} margin={CHART_MARGIN}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.1} />
+
                 <XAxis
                   dataKey="date"
                   tickFormatter={(d) =>
@@ -1570,16 +1563,61 @@ export default function App() {
                 <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
 
                 {show.gold && (
-                  <Line name="Gold" yAxisId={usdAxisId} type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
+                  <Line
+                    name="Gold"
+                    yAxisId={usdAxisId}
+                    type="monotone"
+                    dataKey="goldValue"
+                    stroke="#f2c36b"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
                 )}
                 {show.silver && (
-                  <Line name="Silver" yAxisId={usdAxisId} type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
+                  <Line
+                    name="Silver"
+                    yAxisId={usdAxisId}
+                    type="monotone"
+                    dataKey="silverValue"
+                    stroke="#0e2d4a"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
                 )}
                 {show.strat && (
-                  <Line name="My Portfolio" yAxisId={usdAxisId} type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
+                  <Line
+                    name="My Portfolio"
+                    yAxisId={usdAxisId}
+                    type="monotone"
+                    dataKey="strat"
+                    stroke="#a77d52"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4 }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
                 )}
+
                 {show.gsr && (
-                  <Line name="GSR" yAxisId="leftAxis" type="monotone" dataKey="gsr" stroke="#960019" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "#960019" }} connectNulls isAnimationActive={false} />
+                  <Line
+                    name="GSR"
+                    yAxisId={gsrAxisId}
+                    type="monotone"
+                    dataKey="gsr"
+                    stroke="#960019"
+                    strokeWidth={2}
+                    dot={false}
+                    activeDot={{ r: 4, fill: "#960019" }}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
                 )}
 
                 {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
