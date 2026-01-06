@@ -2,6 +2,16 @@
 import Papa from "papaparse";
 import {
 
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  ReferenceLine,
+  Tooltip,
+} from "recharts";
+
 const dmyToISO = (dmy) => {
   const m = String(dmy || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return "";
@@ -21,15 +31,6 @@ const clampISODate = (iso, minIso, maxIso) => {
   if (Number.isFinite(maxT) && t > maxT) return maxIso;
   return iso;
 };
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  ReferenceLine,
-  Tooltip,
-} from "recharts";
 
 /* ====================== CONFIG ====================== */
 /** Put CSV at: public/data/prices.csv */
@@ -587,7 +588,29 @@ const { minISO, maxISO } = useMemo(() => {
 
   const isValidISO = (iso) => Number.isFinite(Date.parse(iso));
 
-  const isos = rows
+  
+  // Clamp: keep date range within available CSV dates + enforce start <= end
+  useEffect(() => {
+    if (!minISO || !maxISO) return;
+
+    if (startDate) {
+      const s = clampISODate(startDate, minISO, maxISO);
+      if (s !== startDate) setStartDate(s);
+    }
+    if (endDate) {
+      const e = clampISODate(endDate, minISO, maxISO);
+      if (e !== endDate) setEndDate(e);
+    }
+
+    if (startDate && endDate) {
+      const sT = Date.parse(startDate);
+      const eT = Date.parse(endDate);
+      if (Number.isFinite(sT) && Number.isFinite(eT) && sT > eT) {
+        setEndDate(startDate);
+      }
+    }
+  }, [minISO, maxISO, startDate, endDate]);
+const isos = rows
     .map(r => dmyToISO(r.date ?? r.Date ?? r.DATE))
     .filter(iso => iso && isValidISO(iso))
     .sort(); // YYYY-MM-DD sorts lexicographically
@@ -1408,7 +1431,7 @@ const { minISO, maxISO } = useMemo(() => {
           </div>
 
           <div className="gsr-chartInner">
-            <ResponsiveContainer width="100%" height="100%" debounce={0} key={chartRemountKey}>
+            <ResponsiveContainer width="100%" height="100%" debounce={0}>
               <LineChart data={data} margin={CHART_MARGIN}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.1} />
 
@@ -1489,4 +1512,6 @@ const { minISO, maxISO } = useMemo(() => {
     </div>
   );
 }
+
+
 
