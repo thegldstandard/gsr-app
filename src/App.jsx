@@ -386,10 +386,22 @@ function InfoTip({ id, activeId, setActiveId, text }) {
 }
 
 /* ----------------- DD/MM/YYYY pill input ----------------- */
-function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "", maxISO = ""}) {
+function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "", maxISO = "" }) {
   const iso = valueIso || "";
 
-  // --- Snap date pills to available CSV range (minISO/maxISO) ---
+  const [dd, setDd] = useState("");
+  const [mm, setMm] = useState("");
+  const [yyyy, setYyyy] = useState("");
+
+  // Keep the pills in sync with incoming ISO
+  useEffect(() => {
+    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return;
+    setYyyy(m[1]);
+    setMm(m[2]);
+    setDd(m[3]);
+  }, [iso]);
+
   const isoFromParts = (d, m, y) => {
     const dd2 = String(d || "").padStart(2, "0");
     const mm2 = String(m || "").padStart(2, "0");
@@ -398,55 +410,30 @@ function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "",
     return `${yy4}-${mm2}-${dd2}`;
   };
 
-  const setPartsFromISO = (iso) => {
-    const mm = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!mm) return;
-    setYyyy(mm[1]);
-    setMm(mm[2]);
-    setDd(mm[3]);
+  const setPartsFromISO = (v) => {
+    const m = String(v || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) return;
+    setYyyy(m[1]);
+    setMm(m[2]);
+    setDd(m[3]);
   };
-
-  const commitSnap = () => {
-    const rawIso = isoFromParts(dd, mm, yyyy);
-    if (!rawIso) return;
-    if (!minISO || !maxISO) return;
-
-    const clamped = clampISODate(rawIso, minISO, maxISO);
-    // push to parent + snap UI to clamped value
-    if (clamped !== valueIso) onChangeIso(clamped);
-    setPartsFromISO(clamped);
-  };
-
-  const d = useMemo(() => fromIsoLocal(valueIso) || new Date(2000, 0, 1), [valueIso]);
-  const [dd, setDd] = useState(pad2(d.getDate()));
-  const [mm, setMm] = useState(pad2(d.getMonth() + 1));
-  const [yyyy, setYyyy] = useState(String(d.getFullYear()));
-
-  useEffect(() => {
-    const x = fromIsoLocal(valueIso);
-    if (!x) return;
-    setDd(pad2(x.getDate()));
-    setMm(pad2(x.getMonth() + 1));
-    setYyyy(String(x.getFullYear()));
-  }, [valueIso]);
 
   const commit = () => {
-    const day = clampInt(dd, 1, 31);
-    const mon = clampInt(mm, 1, 12);
-    const year = clampInt(yyyy, 1900, 2100);
-    const lastDay = new Date(year, mon, 0).getDate();
-    const safeDay = Math.min(day, lastDay);
-    const finalD = new Date(year, mon - 1, safeDay);
-    onChangeIso(toIsoLocal(finalD));
+    const rawIso = isoFromParts(dd, mm, yyyy);
+    if (!rawIso) return;
+
+    // If we have bounds, clamp. Otherwise just use raw.
+    const next = (minISO && maxISO) ? clampISODate(rawIso, minISO, maxISO) : rawIso;
+
+    if (next !== iso) onChangeIso(next);
+    setPartsFromISO(next);
   };
 
   const onKey = (e) => {
     if (e.key === "Enter") {
       e.currentTarget.blur();
       commit();
-    
-    if (e.key === "Enter") { commitSnap(); }
-  }
+    }
   };
 
   return (
@@ -457,7 +444,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "",
           className="gsr-dateSeg"
           inputMode="numeric"
           value={dd}
-          onChange={(e) = onBlur={commitSnap}> setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
+          onChange={(e) => setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
           onKeyDown={onKey}
         />
         <span className="gsr-dateSlash">/</span>
@@ -465,7 +452,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "",
           className="gsr-dateSeg"
           inputMode="numeric"
           value={mm}
-          onChange={(e) = onBlur={commitSnap}> setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
+          onChange={(e) => setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
           onKeyDown={onKey}
         />
         <span className="gsr-dateSlash">/</span>
@@ -473,7 +460,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "",
           className="gsr-dateSeg gsr-dateYear"
           inputMode="numeric"
           value={yyyy}
-          onChange={(e) = onBlur={commitSnap}> setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
+          onChange={(e) => setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
           onKeyDown={onKey}
         />
       </div>
@@ -1575,6 +1562,7 @@ const [err, setErr] = useState("");
     </div>
   );
 }
+
 
 
 
