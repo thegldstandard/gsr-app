@@ -547,8 +547,8 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
           }}
         />
         <div className="gsr-stepperBtns">
-          <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)} tabIndex={isMobile ? 0 : -1}>▲</button>
-          <button type="button" className="gsr-stepBtn" onClick={() => bump(-1)} tabIndex={isMobile ? 0 : -1}>▼</button>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)}>▲</button>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(-1)}>▼</button>
         </div>
       </div>
     </div>
@@ -1166,14 +1166,15 @@ const [err, setErr] = useState("");
 
 .gsr-stepperInput{
   /* reserve equal space left+right so the value is truly centered */
-  padding-left: 44px;
-  padding-right: 44px;
+  padding-left: 38px;
+  padding-right: 38px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 /* always show the custom buttons (desktop + mobile) */
 .gsr-stepperBtns{
-  position:absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  position:absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: flex; flex-direction: column; gap: 4px; z-index: 2;
 }
 
@@ -1568,6 +1569,7 @@ const [err, setErr] = useState("");
     </div>
   );
 }
+
 
 
 
