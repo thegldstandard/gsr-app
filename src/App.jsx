@@ -12,27 +12,27 @@ import {
 } from "recharts";
 
 /* ====================== CONFIG ====================== */
-/** ✅ Single canonical CSV path (place file at public/data/prices.csv) */
-const CSV_RELATIVE_PATH = "data/prices.csv";
-
-/** ✅ Turn OFF API top-up to guarantee same dataset everywhere */
-const ENABLE_API_TOPUP = false;
+/** Put CSV at: public/data/prices.csv */
+const CSV_REL_PATH = "data/prices.csv";
+/** Turn ON to top-up latest day (so range extends beyond CSV if needed) */
+const ENABLE_API_TOPUP = true;
 /* ==================================================== */
 
 /* ----------------- helpers ----------------- */
 function parseDMY(dateStr) {
   if (!dateStr) return null;
   const s = String(dateStr).trim();
+
+  // ONLY accept dd/mm/yyyy or dd-mm-yyyy (avoid device-dependent Date parsing)
   const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-  if (m) {
-    const dd = +m[1],
-      mm = +m[2],
-      yy = m[3];
-    const yyyy = yy.length === 2 ? (+yy > 50 ? 1900 + +yy : 2000 + +yy) : +yy;
-    const d = new Date(yyyy, (mm || 1) - 1, dd || 1);
-    return isNaN(+d) ? null : d;
-  }
-  const d = new Date(s);
+  if (!m) return null;
+
+  const dd = +m[1];
+  const mm = +m[2];
+  const yy = m[3];
+  const yyyy = yy.length === 2 ? (+yy > 50 ? 1900 + +yy : 2000 + +yy) : +yy;
+
+  const d = new Date(yyyy, (mm || 1) - 1, dd || 1, 0, 0, 0, 0);
   return isNaN(+d) ? null : d;
 }
 
@@ -66,7 +66,7 @@ const fromIsoLocal = (s) => {
   if (!s) return null;
   const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
   return isNaN(+d) ? null : d;
 };
 
@@ -96,6 +96,7 @@ const parseIntOrNull = (s) => {
 const PRICE_SCALE = 1_000_000n; // micro USD
 const CENTS_TO_MICRO = 10_000n; // 1 cent = 10,000 micro USD
 const OZ_SCALE = 1_000_000_000_000n; // 1e12
+const RATIO_SCALE = 1_000_000n; // ratio scaled to 6dp
 
 const bi = (x) => BigInt(x);
 
@@ -110,6 +111,7 @@ const divRoundHalfUp = (num, den) => {
 
 const toPriceMicro = (priceNumber) => {
   if (!Number.isFinite(priceNumber)) return null;
+  // lock to 6 dp so all devices make the same integer
   const s = Number(priceNumber).toFixed(6);
   const neg = s.startsWith("-");
   const t = neg ? s.slice(1) : s;
@@ -134,28 +136,113 @@ const ouncesScaledToUsdCents = (ozScaled, priceMicro) => {
 
 const applyFee97pct = (usdCents) => divRoundHalfUp(bi(usdCents) * 97n, 100n);
 
-/** ✅ single display convention everywhere */
 const centsToRoundedDollars = (cents) => divRoundHalfUp(bi(cents), 100n);
 const fmtMoney0 = (cents) => `$${fmtInt(centsToRoundedDollars(cents))}`;
 
-/* ---- CSV only (deterministic) ---- */
-async function fetchCSVText() {
-  const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
+// Deterministic ratio calc
+const gsrScaledFromMicros = (goldMicro, silverMicro) => {
+  if (!goldMicro || !silverMicro || silverMicro === 0n) return null;
+  return divRoundHalfUp(goldMicro * RATIO_SCALE, silverMicro);
+};
+const gsrScaledToNumber = (gsrScaled) => (gsrScaled == null ? null : Number(gsrScaled) / 1e6);
 
-  // ✅ Force ONE URL only (no candidates)
-  // ✅ Cache-bust so GitHub Pages and local serve same latest CSV
-  const url = `${base}${CSV_RELATIVE_PATH}?v=${Date.now()}`;
+/* -------- ticks -------- */
+function niceTicks(min, max, target = 7) {
+  if (!Number.isFinite(min) || !Number.isFinite(max))
+    return { domain: ["auto", "auto"], ticks: undefined };
 
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`CSV HTTP ${res.status} for ${url}`);
+  if (min === max) {
+    const a = min - 1;
+    const b = max + 1;
+    return { domain: [a, b], ticks: [a, min, b] };
+  }
 
-  const textRaw = await res.text();
-  if (/^\s*<!doctype/i.test(textRaw)) throw new Error(`Got HTML instead of CSV from ${url}`);
+  const range = max - min;
+  const roughStep = range / Math.max(2, target - 1);
+  const pow10 = Math.pow(10, Math.floor(Math.log10(roughStep)));
+  const candidates = [1, 2, 2.5, 5, 10].map((m) => m * pow10);
+  const step = candidates.reduce(
+    (best, s) => (Math.abs(s - roughStep) < Math.abs(best - roughStep) ? s : best),
+    candidates[0]
+  );
 
-  return textRaw.replace(/^\uFEFF/, "");
+  const niceMin = Math.floor(min / step) * step;
+  const niceMax = Math.ceil(max / step) * step;
+
+  const ticks = [];
+  for (let v = niceMin; v <= niceMax + step / 2; v += step) ticks.push(v);
+  return { domain: [niceMin, niceMax], ticks };
 }
 
-/* (Optional) API top-up, disabled by default */
+function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZero = false) {
+  if (!Number.isFinite(min) || !Number.isFinite(max))
+    return { domain: ["auto", "auto"], ticks: undefined };
+
+  if (min === max) {
+    const a = min - 1;
+    const b = max + 1;
+    return { domain: [a, b], ticks: [a, min, b] };
+  }
+
+  const range = max - min;
+  const pad = range * padFrac;
+
+  let paddedMin = min - pad * 0.25;
+  let paddedMax = max + pad;
+
+  if (clampMinToZero) paddedMin = Math.max(0, paddedMin);
+
+  return niceTicks(paddedMin, paddedMax, target);
+}
+
+/* ---- CSV fetch (ROBUST for dev + GH pages + accidental /gsr-app/ in dev) ---- */
+async function fetchCSVText() {
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
+  const bust = `?v=${Date.now()}`;
+
+  const candidates = [
+    `${base}${CSV_REL_PATH}${bust}`,     // GH pages build: /gsr-app/data/prices.csv
+    `/${CSV_REL_PATH}${bust}`,           // dev root: /data/prices.csv
+    `/gsr-app/${CSV_REL_PATH}${bust}`,   // if you opened localhost:5174/gsr-app/
+    `${base}prices.csv${bust}`,
+    `/prices.csv${bust}`,
+  ];
+
+  let lastErr = null;
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) {
+        lastErr = new Error(`CSV HTTP ${res.status} for ${url}`);
+        continue;
+      }
+
+      const textRaw = await res.text();
+
+      // If we got HTML, we hit index.html fallback => URL not a real file
+      if (
+        /^\s*<!doctype/i.test(textRaw) ||
+        (textRaw.includes("<html") && textRaw.includes("</html>"))
+      ) {
+        lastErr = new Error(
+          `Got HTML instead of CSV from ${url}\n` +
+          `Expected file at: public/data/prices.csv\n` +
+          `Check spelling + location, then restart npm run dev.`
+        );
+        continue;
+      }
+
+      return textRaw.replace(/^\uFEFF/, "");
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  throw lastErr || new Error(`prices.csv not found. Expected: public/${CSV_REL_PATH}`);
+}
+
+/* ✅ API top-up (adds “today” row if CSV behind) */
 async function fetchLatestFromAPI() {
   try {
     const key = import.meta?.env?.VITE_METAL_API_KEY || "98ce31de34ecaadcd00d49d12137a56a";
@@ -171,8 +258,24 @@ async function fetchLatestFromAPI() {
     const silverUSD = 1 / rXAG;
 
     const today = new Date();
-    const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    return { ok: true, row: { date: todayLocal, gold: goldUSD, silver: silverUSD, gsr: goldUSD / silverUSD } };
+    const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+
+    const goldMicro = toPriceMicro(goldUSD);
+    const silverMicro = toPriceMicro(silverUSD);
+    const gsrScaled = gsrScaledFromMicros(goldMicro, silverMicro);
+
+    return {
+      ok: true,
+      row: {
+        date: todayLocal,
+        gold: goldUSD,
+        silver: silverUSD,
+        goldMicro,
+        silverMicro,
+        gsrScaled,
+        gsr: gsrScaledToNumber(gsrScaled),
+      },
+    };
   } catch (e) {
     console.warn("MetalPriceAPI latest failed:", e);
     return { ok: false, error: String(e?.message || e) };
@@ -185,7 +288,13 @@ function useViewportMetrics() {
     const w = typeof window !== "undefined" ? Math.round(window.innerWidth) : 1200;
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
     const h = Math.round(vv?.height ?? (typeof window !== "undefined" ? window.innerHeight : 800));
-    return { w, h, isMobile: w <= 640, isTablet: w > 640 && w <= 1024, isLandscape: w > h };
+    return {
+      w,
+      h,
+      isMobile: w <= 640,
+      isTablet: w > 640 && w <= 1024,
+      isLandscape: w > h,
+    };
   };
 
   const [m, setM] = useState(read);
@@ -256,7 +365,7 @@ function useViewportMetrics() {
 }
 
 /* ----------------- tooltips ----------------- */
-function InfoTip({ id, activeId, setActiveId, text }) {
+function InfoTip({ id, activeId, setActiveTipId, text }) {
   const open = activeId === id;
   const touchedRef = useRef(false);
 
@@ -264,10 +373,10 @@ function InfoTip({ id, activeId, setActiveId, text }) {
     <span
       className="gsr-tipWrap"
       onMouseEnter={() => {
-        if (!touchedRef.current) setActiveId(id);
+        if (!touchedRef.current) setActiveTipId(id);
       }}
       onMouseLeave={() => {
-        if (!touchedRef.current) setActiveId(null);
+        if (!touchedRef.current) setActiveTipId(null);
       }}
     >
       <button
@@ -281,7 +390,7 @@ function InfoTip({ id, activeId, setActiveId, text }) {
         }}
         onClick={(e) => {
           e.stopPropagation();
-          setActiveId((cur) => (cur === id ? null : id));
+          setActiveTipId((cur) => (cur === id ? null : id));
         }}
       >
         i
@@ -317,7 +426,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
     const year = clampInt(yyyy, 1900, 2100);
     const lastDay = new Date(year, mon, 0).getDate();
     const safeDay = Math.min(day, lastDay);
-    const finalD = new Date(year, mon - 1, safeDay);
+    const finalD = new Date(year, mon - 1, safeDay, 0, 0, 0, 0);
     onChangeIso(toIsoLocal(finalD));
   };
 
@@ -345,10 +454,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
 /* ----------------- Currency input ----------------- */
 function CurrencyInput({ value, onChange, className = "" }) {
   const [txt, setTxt] = useState((value ?? 0).toLocaleString("en-GB"));
-
-  useEffect(() => {
-    setTxt((value ?? 0).toLocaleString("en-GB"));
-  }, [value]);
+  useEffect(() => setTxt((value ?? 0).toLocaleString("en-GB")), [value]);
 
   const handleChange = (e) => {
     const digits = e.target.value.replace(/[^\d]/g, "");
@@ -360,7 +466,7 @@ function CurrencyInput({ value, onChange, className = "" }) {
   return <input className={`gsr-pill ${className}`} inputMode="numeric" value={txt} onChange={handleChange} />;
 }
 
-/* ----------------- Ratio input (blank allowed + mobile stepper) ----------------- */
+/* ----------------- Ratio input ----------------- */
 function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 999, step = 1 }) {
   const sanitize = (raw) => raw.replace(/[^\d]/g, "").slice(0, 4);
 
@@ -368,8 +474,7 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
     if (!valueText) return;
     const n = parseIntOrNull(valueText);
     if (n == null) return;
-    const clamped = clampInt(n, min, max);
-    onChangeText(String(clamped));
+    onChangeText(String(clampInt(n, min, max)));
   };
 
   const nNow = parseIntOrNull(valueText);
@@ -440,17 +545,7 @@ function CustomTooltip({ active, label, payload }) {
     .filter((r) => !String(r.name).startsWith("__axis_helper__"));
 
   return (
-    <div
-      style={{
-        background: "rgba(255,255,255,0.96)",
-        borderRadius: 12,
-        padding: "10px 12px",
-        color: "#0b1b2a",
-        boxShadow: "0 10px 25px rgba(0,0,0,0.22)",
-        minWidth: 220,
-        maxWidth: 340,
-      }}
-    >
+    <div style={{ background: "rgba(255,255,255,0.96)", borderRadius: 12, padding: "10px 12px", color: "#0b1b2a", boxShadow: "0 10px 25px rgba(0,0,0,0.22)", minWidth: 220, maxWidth: 340 }}>
       <div style={{ fontWeight: 1000, marginBottom: 8 }}>{labelText}</div>
       <div style={{ display: "grid", gap: 6 }}>
         {rows.map((r) => (
@@ -467,7 +562,7 @@ function CustomTooltip({ active, label, payload }) {
   );
 }
 
-/* -------- duration between 2 dates (years + months) -------- */
+/* -------- duration between 2 dates -------- */
 function diffYearsMonths(startDate, endDate) {
   if (!startDate || !endDate) return { years: 0, months: 0 };
   let months =
@@ -478,11 +573,11 @@ function diffYearsMonths(startDate, endDate) {
   return { years: Math.floor(months / 12), months: months % 12 };
 }
 
-/* ======================= component ======================= */
+/* ================== component ================== */
 export default function App() {
   const { isMobile, isTablet, w, h } = useViewportMetrics();
-  const [activeTipId, setActiveTipId] = useState(null);
 
+  const [activeTipId, setActiveTipId] = useState(null);
   useEffect(() => {
     const close = () => setActiveTipId(null);
     document.addEventListener("pointerdown", close);
@@ -500,6 +595,7 @@ export default function App() {
 
   const [g2sText, setG2SText] = useState("85");
   const [s2gText, setS2GText] = useState("65");
+
   const [startMetal, setStartMetal] = useState("silver");
 
   const g2s = useMemo(() => {
@@ -512,23 +608,36 @@ export default function App() {
     return n == null ? null : clampInt(n, 0, 999);
   }, [s2gText]);
 
+  // deterministic thresholds (scaled)
+  const g2sScaled = useMemo(() => (g2s == null ? null : bi(g2s) * RATIO_SCALE), [g2s]);
+  const s2gScaled = useMemo(() => (s2g == null ? null : bi(s2g) * RATIO_SCALE), [s2g]);
+
   const AXIS_COLOR = "#0b1b2a";
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
   const SHOW_AXIS_LABELS = !isMobile;
 
-  const CHART_MARGIN = useMemo(() => (isMobile ? { top: 18, right: 8, left: 8, bottom: 18 } : { top: 20, right: 15, left: 15, bottom: 22 }), [isMobile]);
+  const CHART_MARGIN = useMemo(() => {
+    if (isMobile) return { top: 18, right: 8, left: 8, bottom: 18 };
+    return { top: 20, right: 15, left: 15, bottom: 22 };
+  }, [isMobile]);
 
   const CHART_HEIGHT = useMemo(() => {
-    const landscape = w > h;
-    if (isMobile && landscape) return Math.max(260, Math.min(560, Math.round(h * 0.78)));
-    if (isMobile) return Math.max(320, Math.min(520, Math.round(h * 0.52)));
+    const vh = h;
+    const vw = w;
+    const landscape = vw > vh;
+
+    if (isMobile && landscape) return Math.max(260, Math.min(560, Math.round(vh * 0.78)));
+    if (isMobile) return Math.max(320, Math.min(520, Math.round(vh * 0.52)));
     if (isTablet) return 520;
     return 660;
   }, [isMobile, isTablet, w, h]);
 
+  /* ========= LOAD DATA (CSV + optional API top-up) ========= */
   useEffect(() => {
     (async () => {
       try {
+        setErr("");
+
         const text = await fetchCSVText();
         const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
 
@@ -536,20 +645,30 @@ export default function App() {
           .map((o) => {
             const m = {};
             for (const k in o) m[norm(k)] = o[k];
+
             const gold = toNum(m.gold);
             const silver = toNum(m.silver);
             const date = parseDMY(m.date) || parseDMY(m.datetime) || parseDMY(m.day);
-            const gsr = gold != null && silver != null && silver !== 0 ? gold / silver : null;
-            return { date, gold, silver, gsr };
+            if (!date || gold == null || silver == null) return null;
+
+            const goldMicro = toPriceMicro(gold);
+            const silverMicro = toPriceMicro(silver);
+            const gsrScaled = gsrScaledFromMicros(goldMicro, silverMicro);
+            const gsr = gsrScaledToNumber(gsrScaled);
+            if (goldMicro == null || silverMicro == null || gsrScaled == null || gsr == null) return null;
+
+            return { date, gold, silver, goldMicro, silverMicro, gsrScaled, gsr };
           })
-          .filter((d) => d.date && d.gold != null && d.silver != null && d.gsr != null);
+          .filter(Boolean);
 
         mapped.sort((a, b) => a.date - b.date);
 
+        // ✅ top-up latest date from API if CSV is behind today
         if (ENABLE_API_TOPUP && mapped.length) {
           const last = mapped[mapped.length - 1].date;
           const today = new Date();
-          const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+          const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+
           if (last < todayLocal) {
             const api = await fetchLatestFromAPI();
             if (api.ok && api.row?.date) {
@@ -570,7 +689,7 @@ export default function App() {
           setEndIso((s) => s || maxIso);
         }
       } catch (e) {
-        setErr(String(e.message || e));
+        setErr(String(e?.message || e));
       }
     })();
   }, []);
@@ -581,45 +700,78 @@ export default function App() {
     return map;
   }, [rows]);
 
-  const adjustToAvailable = (iso) => {
+  const bounds = useMemo(() => {
+    if (!rows.length) return { minIso: "", maxIso: "" };
+    return { minIso: toIsoLocal(rows[0].date), maxIso: toIsoLocal(rows[rows.length - 1].date) };
+  }, [rows]);
+
+  // ✅ snap ISO date to nearest available
+  const snapToNearestAvailable = (iso) => {
     if (!iso || !rows.length) return iso;
     if (dateMap.has(iso)) return iso;
-    const start = fromIsoLocal(iso);
-    if (!start) return iso;
-    let cur = start;
-    for (let i = 0; i < 3660; i++) {
-      cur = addDays(cur, 1);
-      const key = toIsoLocal(cur);
-      if (dateMap.has(key)) return key;
+
+    const d0 = fromIsoLocal(iso);
+    if (!d0) return iso;
+
+    for (let i = 1; i <= 3660; i++) {
+      const back = toIsoLocal(addDays(d0, -i));
+      if (dateMap.has(back)) return back;
+      const fwd = toIsoLocal(addDays(d0, +i));
+      if (dateMap.has(fwd)) return fwd;
     }
     return iso;
   };
 
+  const sanitizeIso = (rawIso) => {
+    if (!rawIso || !rows.length) return rawIso;
+
+    let iso = rawIso;
+    if (bounds.minIso && iso < bounds.minIso) iso = bounds.minIso;
+    if (bounds.maxIso && iso > bounds.maxIso) iso = bounds.maxIso;
+
+    iso = snapToNearestAvailable(iso);
+
+    if (bounds.minIso && iso < bounds.minIso) iso = bounds.minIso;
+    if (bounds.maxIso && iso > bounds.maxIso) iso = bounds.maxIso;
+
+    return iso;
+  };
+
+  const onChangeStartIso = (rawIso) => {
+    const nextStart = sanitizeIso(rawIso);
+    setStartIso(nextStart);
+
+    setEndIso((curEnd) => {
+      const endSan = sanitizeIso(curEnd);
+      if (!endSan) return endSan;
+      if (nextStart && endSan < nextStart) return nextStart;
+      return endSan;
+    });
+  };
+
+  const onChangeEndIso = (rawIso) => {
+    const nextEnd = sanitizeIso(rawIso);
+    setEndIso(nextEnd);
+
+    setStartIso((curStart) => {
+      const startSan = sanitizeIso(curStart);
+      if (!startSan) return startSan;
+      if (nextEnd && startSan > nextEnd) return nextEnd;
+      return startSan;
+    });
+  };
+
   const { startIsoAdj, endIsoAdj } = useMemo(() => {
-    if (!rows.length || !startIso || !endIso) return { startIsoAdj: startIso, endIsoAdj: endIso };
-
-    const minIso = toIsoLocal(rows[0].date);
-    const maxIso = toIsoLocal(rows[rows.length - 1].date);
-
-    let s = startIso;
-    let e = endIso;
-
-    if (s < minIso) s = minIso;
-    if (s > maxIso) s = maxIso;
-    if (e < minIso) e = minIso;
-    if (e > maxIso) e = maxIso;
-    if (s > e) e = s;
-
-    return { startIsoAdj: adjustToAvailable(s), endIsoAdj: adjustToAvailable(e) };
-  }, [rows, startIso, endIso, dateMap]);
+    return { startIsoAdj: sanitizeIso(startIso), endIsoAdj: sanitizeIso(endIso) };
+  }, [startIso, endIso, rows, dateMap, bounds.minIso, bounds.maxIso]);
 
   const windowed = useMemo(() => {
     if (!rows.length || !startIsoAdj || !endIsoAdj) return [];
     const s = fromIsoLocal(startIsoAdj);
     const e = fromIsoLocal(endIsoAdj);
     if (!s || !e) return [];
-    const start = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0);
-    const end = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
+    const start = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0, 0);
+    const end = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59, 999);
     return rows.filter((r) => r.date >= start && r.date <= end);
   }, [rows, startIsoAdj, endIsoAdj]);
 
@@ -627,42 +779,29 @@ export default function App() {
     if (!windowed.length) return [];
 
     const start = windowed[0];
-    const goldMicro0 = toPriceMicro(start.gold);
-    const silverMicro0 = toPriceMicro(start.silver);
-    if (!goldMicro0 || !silverMicro0) return [];
-
     const amountCents = bi(amount) * 100n;
 
-    const goldOzScaledBH = amount > 0 && start.gold > 0 ? usdCentsToOuncesScaled(amountCents, goldMicro0) : 0n;
-    const silverOzScaledBH = amount > 0 && start.silver > 0 ? usdCentsToOuncesScaled(amountCents, silverMicro0) : 0n;
+    const goldOzScaledBH = amount > 0 && start.gold > 0 ? usdCentsToOuncesScaled(amountCents, start.goldMicro) : 0n;
+    const silverOzScaledBH = amount > 0 && start.silver > 0 ? usdCentsToOuncesScaled(amountCents, start.silverMicro) : 0n;
 
-    return windowed
-      .map((r) => {
-        const gMicro = toPriceMicro(r.gold);
-        const sMicro = toPriceMicro(r.silver);
-        if (!gMicro || !sMicro) return null;
+    return windowed.map((r) => {
+      const goldValueCents = ouncesScaledToUsdCents(goldOzScaledBH, r.goldMicro);
+      const silverValueCents = ouncesScaledToUsdCents(silverOzScaledBH, r.silverMicro);
 
-        const goldValueCents = ouncesScaledToUsdCents(goldOzScaledBH, gMicro);
-        const silverValueCents = ouncesScaledToUsdCents(silverOzScaledBH, sMicro);
-
-        return {
-          ...r,
-          goldMicro: gMicro,
-          silverMicro: sMicro,
-          goldValueCents,
-          silverValueCents,
-          goldValue: Number(goldValueCents) / 100,
-          silverValue: Number(silverValueCents) / 100,
-        };
-      })
-      .filter(Boolean);
+      return {
+        ...r,
+        goldValueCents,
+        silverValueCents,
+        goldValue: Number(goldValueCents) / 100,
+        silverValue: Number(silverValueCents) / 100,
+      };
+    });
   }, [windowed, amount]);
 
   const withStrategy = useMemo(() => {
     if (!valuedRows.length) return { data: [], endsIn: "gold" };
 
     const amountCents = bi(amount) * 100n;
-
     let metal = startMetal === "silver" ? "silver" : "gold";
     const first = valuedRows[0];
 
@@ -677,8 +816,21 @@ export default function App() {
     const out = valuedRows.map((r, idx) => {
       if (idx > 0) {
         const prev = valuedRows[idx - 1];
-        const up = Number.isFinite(g2s) && prev.gsr < g2s && r.gsr >= g2s;
-        const down = Number.isFinite(s2g) && prev.gsr > s2g && r.gsr <= s2g;
+
+        // ✅ deterministic switching using BigInt ratio (no float rounding differences)
+        const up =
+          g2sScaled != null &&
+          prev.gsrScaled != null &&
+          r.gsrScaled != null &&
+          prev.gsrScaled < g2sScaled &&
+          r.gsrScaled >= g2sScaled;
+
+        const down =
+          s2gScaled != null &&
+          prev.gsrScaled != null &&
+          r.gsrScaled != null &&
+          prev.gsrScaled > s2gScaled &&
+          r.gsrScaled <= s2gScaled;
 
         if (metal === "gold" && up) {
           const usdCents = ouncesScaledToUsdCents(ozGoldScaled, r.goldMicro);
@@ -706,14 +858,14 @@ export default function App() {
     });
 
     return { data: out, endsIn: out[out.length - 1]?.stratMetal || metal };
-  }, [valuedRows, amount, g2s, s2g, startMetal]);
+  }, [valuedRows, amount, g2sScaled, s2gScaled, startMetal]);
 
   const data = withStrategy.data;
 
   const startRatio = useMemo(() => {
     if (!startIsoAdj) return null;
     const r = dateMap.get(startIsoAdj);
-    return r?.gsr != null && Number.isFinite(r.gsr) ? r.gsr : null;
+    return r?.gsrScaled != null ? gsrScaledToNumber(r.gsrScaled) : null;
   }, [dateMap, startIsoAdj]);
 
   const durationText = useMemo(() => {
@@ -731,7 +883,23 @@ export default function App() {
     const amountCents = bi(amount) * 100n;
 
     if (!data.length) {
-      return { gvC: amountCents, svC: amountCents, pvC: amountCents, gchgC: 0n, schgC: 0n, pchgC: 0n, gpct: 0, spct: 0, ppct: 0, switches: 0, pBeatsG: 0, pBeatsS: 0, endsIn: "GOLD" };
+      return {
+        gvC: amountCents,
+        svC: amountCents,
+        pvC: amountCents,
+        gchgC: 0n,
+        schgC: 0n,
+        pchgC: 0n,
+        gpct: 0,
+        spct: 0,
+        ppct: 0,
+        diffPg: 0,
+        diffPs: 0,
+        switches: 0,
+        pBeatsG: 0,
+        pBeatsS: 0,
+        endsIn: "GOLD",
+      };
     }
 
     const end = data[data.length - 1];
@@ -748,67 +916,88 @@ export default function App() {
     const spct = amountCents > 0n ? (Number(svC) / Number(amountCents) - 1) * 100 : 0;
     const ppct = amountCents > 0n ? (Number(pvC) / Number(amountCents) - 1) * 100 : 0;
 
+    const diffPg = ppct - gpct;
+    const diffPs = ppct - spct;
+
     let totalG = 0, winsG = 0;
     let totalS = 0, winsS = 0;
 
     for (const r of data) {
-      if (r.stratCents != null && r.goldValueCents != null) { totalG++; if (r.stratCents > r.goldValueCents) winsG++; }
-      if (r.stratCents != null && r.silverValueCents != null) { totalS++; if (r.stratCents > r.silverValueCents) winsS++; }
+      if (r.stratCents != null && r.goldValueCents != null) {
+        totalG++;
+        if (r.stratCents > r.goldValueCents) winsG++;
+      }
+      if (r.stratCents != null && r.silverValueCents != null) {
+        totalS++;
+        if (r.stratCents > r.silverValueCents) winsS++;
+      }
     }
 
     const pBeatsG = totalG ? (winsG / totalG) * 100 : 0;
     const pBeatsS = totalS ? (winsS / totalS) * 100 : 0;
 
     return {
-      gvC, svC, pvC, gchgC, schgC, pchgC,
+      gvC, svC, pvC,
+      gchgC, schgC, pchgC,
       gpct, spct, ppct,
+      diffPg, diffPs,
       switches: end.switches ?? 0,
       pBeatsG, pBeatsS,
       endsIn: (withStrategy.endsIn || "gold").toUpperCase(),
     };
   }, [data, amount, withStrategy.endsIn]);
 
-  const anyUsdOn = show.gold || show.silver || show.strat;
-  const gsrOn = show.gsr;
+  const { usdDomain, usdTicks } = useMemo(() => {
+    if (!data.length) return { usdDomain: ["auto", "auto"], usdTicks: undefined };
 
-  const axisMode =
-    !anyUsdOn && !gsrOn ? "NONE" :
-    gsrOn && !anyUsdOn ? "RATIO_BOTH" :
-    !gsrOn && anyUsdOn ? "USD_BOTH" : "MIXED";
+    let min = Infinity;
+    let max = -Infinity;
 
-  const hideAxisText = axisMode === "NONE";
-
-  const { usdDomain } = useMemo(() => {
-    if (!data.length) return { usdDomain: ["auto", "auto"] };
-    let min = Infinity, max = -Infinity;
     for (const r of data) {
       if (show.gold && r.goldValue != null) { min = Math.min(min, r.goldValue); max = Math.max(max, r.goldValue); }
       if (show.silver && r.silverValue != null) { min = Math.min(min, r.silverValue); max = Math.max(max, r.silverValue); }
       if (show.strat && r.strat != null) { min = Math.min(min, r.strat); max = Math.max(max, r.strat); }
     }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return { usdDomain: ["auto", "auto"] };
-    const range = max - min;
-    const pad = range * 0.06;
-    return { usdDomain: [Math.max(0, min - pad * 0.25), max + pad] };
+
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return { usdDomain: ["auto", "auto"], usdTicks: undefined };
+    const out = niceTicksWithPadding(min, max, 7, 0.06, true);
+    return { usdDomain: out.domain, usdTicks: out.ticks };
   }, [data, show]);
 
-  const { ratioDomain } = useMemo(() => {
-    if (!data.length) return { ratioDomain: ["auto", "auto"] };
-    let min = Infinity, max = -Infinity;
+  const { ratioDomain, ratioTicks } = useMemo(() => {
+    if (!data.length) return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
+
+    let min = Infinity;
+    let max = -Infinity;
+
     for (const r of data) {
-      if (r.gsr != null && Number.isFinite(r.gsr)) { min = Math.min(min, r.gsr); max = Math.max(max, r.gsr); }
+      if (r.gsr != null && Number.isFinite(r.gsr)) {
+        min = Math.min(min, r.gsr);
+        max = Math.max(max, r.gsr);
+      }
     }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return { ratioDomain: ["auto", "auto"] };
-    const range = max - min;
-    const pad = range * 0.06;
-    return { ratioDomain: [min - pad * 0.25, max + pad] };
+
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return { ratioDomain: ["auto", "auto"], ratioTicks: undefined };
+    const out = niceTicksWithPadding(min, max, 7, 0.06, false);
+    return { ratioDomain: out.domain, ratioTicks: out.ticks };
   }, [data]);
+
+  const anyUsdOn = show.gold || show.silver || show.strat;
+  const gsrOn = show.gsr;
+
+  const axisMode =
+    !anyUsdOn && !gsrOn
+      ? "NONE"
+      : gsrOn && !anyUsdOn
+      ? "RATIO_BOTH"
+      : !gsrOn && anyUsdOn
+      ? "USD_BOTH"
+      : "MIXED";
+
+  const hideAxisText = axisMode === "NONE";
 
   const leftIsRatio = axisMode === "MIXED" || axisMode === "RATIO_BOTH";
   const rightIsRatio = axisMode === "RATIO_BOTH";
-
-  const leftDomain = leftIsRatio ? ratioDomain : usdDomain;
-  const rightDomain = rightIsRatio ? ratioDomain : usdDomain;
 
   const leftLabel = hideAxisText ? "" : leftIsRatio ? "Ratio" : "Value (USD)";
   const rightLabel = hideAxisText ? "" : rightIsRatio ? "Ratio" : "Value (USD)";
@@ -816,7 +1005,21 @@ export default function App() {
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
   const gsrAxisId = "leftAxis";
 
-  const chartRemountKey = useMemo(() => JSON.stringify({ w, h, chartH: CHART_HEIGHT, axisMode, show }), [w, h, CHART_HEIGHT, axisMode, show]);
+  const usdHelperKey = useMemo(() => {
+    if (show.strat) return "strat";
+    if (show.gold) return "goldValue";
+    if (show.silver) return "silverValue";
+    return "goldValue";
+  }, [show.strat, show.gold, show.silver]);
+
+  const axisKeyPart = useMemo(() => {
+    return JSON.stringify({ axisMode, show, usdAxisId, usdDomain, usdTicks, ratioDomain, ratioTicks });
+  }, [axisMode, show, usdAxisId, usdDomain, usdTicks, ratioDomain, ratioTicks]);
+
+  const chartRemountKey = useMemo(
+    () => JSON.stringify({ w, h, chartH: CHART_HEIGHT, axisKeyPart }),
+    [w, h, CHART_HEIGHT, axisKeyPart]
+  );
 
   const yTickFont = isMobile ? 11 : 13;
   const xTickFont = isMobile ? 11 : 12;
@@ -826,9 +1029,14 @@ export default function App() {
     <div className="gsr-page">
       <style>{`
         :root{
-          --bg:#123a5a; --panel:#f4efe7; --gold:#b58b58; --ink:#0b1b2a;
-          --pill:#ffffff; --shadow: 0 16px 40px rgba(0,0,0,0.25);
-          --radius: 22px; --ctrlH: 40px;
+          --bg:#123a5a;
+          --panel:#f4efe7;
+          --gold:#b58b58;
+          --ink:#0b1b2a;
+          --pill:#ffffff;
+          --shadow: 0 16px 40px rgba(0,0,0,0.25);
+          --radius: 22px;
+          --ctrlH: 40px;
         }
         *{box-sizing:border-box}
         body{margin:0;background:var(--bg)}
@@ -842,7 +1050,13 @@ export default function App() {
         .gsr-container{ max-width: 1600px; margin: 0 auto; }
 
         .gsr-header{ display:flex; flex-direction:column; align-items:center; gap:10px; margin-bottom: 18px; }
-        .gsr-title{ font-family: Georgia, "Times New Roman", Times, serif; font-size: 56px; margin:0; letter-spacing:0.5px; text-align:center; }
+        .gsr-title{
+          font-family: Georgia, "Times New Roman", Times, serif;
+          font-size: 56px;
+          margin:0;
+          letter-spacing:0.5px;
+          text-align:center;
+        }
         .gsr-title-underline{ width: 280px; height: 4px; background: var(--gold); border-radius: 999px; }
 
         .gsr-controls{
@@ -894,6 +1108,21 @@ export default function App() {
         .gsr-pillSelect{ text-align: center; text-align-last: center; }
         .gsr-pillSelect option{ text-align:left; }
 
+        .gsr-stepper{ position: relative; width: 100%; }
+        .gsr-stepperInput{ padding-right: 44px; }
+        .gsr-stepperBtns{
+          position:absolute; right: 10px; top: 50%; transform: translateY(-50%);
+          display: none; flex-direction: column; gap: 4px; z-index: 2;
+        }
+        .gsr-stepper.is-mobile .gsr-stepperBtns{ display:flex; }
+        .gsr-stepBtn{
+          width: 26px; height: 16px; border-radius: 10px; border: 0;
+          background: rgba(11,27,42,0.10); color: #0b1b2a;
+          font-weight: 1000; font-size: 11px; line-height: 16px;
+          cursor: pointer; padding: 0;
+          display:flex; align-items:center; justify-content:center; user-select:none;
+        }
+
         .gsr-datePills{
           height: var(--ctrlH);
           width: 100%;
@@ -919,31 +1148,15 @@ export default function App() {
         }
         .gsr-dateYear{width: 88px;}
         .gsr-dateSlash{color:#64748b; font-weight:1000;}
-        .gsr-datePills--compact{ gap:6px; padding: 0 10px; }
-        .is-compact .gsr-label{ font-size: 12px; }
-
-        .gsr-stepper{ position: relative; width: 100%; }
-        .gsr-stepperInput{ padding-right: 14px; }
-        .gsr-stepperBtns{
-          position:absolute; right: 10px; top: 50%; transform: translateY(-50%);
-          display: none; flex-direction: column; gap: 4px; z-index: 2;
-        }
-        .gsr-stepBtn{
-          width: 26px; height: 16px; border-radius: 10px; border: 0;
-          background: rgba(11,27,42,0.10); color: #0b1b2a;
-          font-weight: 1000; font-size: 11px; line-height: 16px;
-          cursor: pointer; padding: 0; display:flex; align-items:center; justify-content:center;
-          user-select:none;
-        }
-        .gsr-stepBtn:active{ transform: scale(0.98); }
-        .gsr-stepper.is-mobile .gsr-stepperBtns{ display:flex; }
 
         .gsr-cards{
-          display:grid; grid-template-columns: 360px 1fr;
-          gap: 16px; margin-bottom: 12px; align-items: stretch;
+          display:grid;
+          grid-template-columns: 360px 1fr;
+          gap: 16px;
+          margin-bottom: 12px;
+          align-items: stretch;
         }
         @media (max-width: 1200px){ .gsr-cards{grid-template-columns: 1fr;} }
-
         .gsr-leftStack{ display:grid; grid-template-rows: 1fr 1fr; gap: 16px; }
 
         .gsr-card{
@@ -953,9 +1166,26 @@ export default function App() {
           padding: 16px 16px 14px;
           min-height: 190px;
         }
-        .gsr-cardTitle{ font-family: Georgia, "Times New Roman", Times, serif; font-size: 42px; margin: 0 0 6px 0; color: rgba(255,255,255,0.95); }
-        .gsr-cardValue{ font-family: Georgia, "Times New Roman", Times, serif; font-size: 28px; font-weight: 900; color: #fff3d9; margin-bottom: 10px; }
-        .gsr-cardInner{ background: var(--panel); border-radius: 14px; padding: 12px 12px; color: var(--ink); font-weight: 900; }
+        .gsr-cardTitle{
+          font-family: Georgia, "Times New Roman", Times, serif;
+          font-size: 42px;
+          margin: 0 0 6px 0;
+          color: rgba(255,255,255,0.95);
+        }
+        .gsr-cardValue{
+          font-family: Georgia, "Times New Roman", Times, serif;
+          font-size: 28px;
+          font-weight: 900;
+          color: #fff3d9;
+          margin-bottom: 10px;
+        }
+        .gsr-cardInner{
+          background: var(--panel);
+          border-radius: 14px;
+          padding: 12px 12px;
+          color: var(--ink);
+          font-weight: 900;
+        }
 
         .gsr-twoLine{ display:flex; flex-direction:column; gap:8px; }
         .gsr-row{ display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
@@ -968,12 +1198,15 @@ export default function App() {
         .gsr-card--portfolio .gsr-cardInner{ font-size: 18px; padding: 16px 16px; }
 
         .gsr-portfolioGrid{
-          display:grid; grid-template-columns: 1fr 1fr;
-          column-gap: 20px; row-gap: 10px; align-items:baseline;
+          display:grid;
+          grid-template-columns: 1fr 1fr;
+          column-gap: 20px;
+          row-gap: 10px;
+          align-items:baseline;
         }
         .gsr-portfolioGrid .right{ text-align:right; }
 
-        .gsr-error{color:#ffb4b4; font-weight:900;}
+        .gsr-error{color:#ffb4b4; font-weight:900; white-space:pre-line;}
 
         .gsr-chartWrap{
           background: var(--panel);
@@ -997,7 +1230,8 @@ export default function App() {
         .gsr-tipBubble{
           position:absolute; z-index: 50;
           bottom: calc(100% + 10px);
-          left: 50%; transform: translateX(-50%);
+          left: 50%;
+          transform: translateX(-50%);
           background: rgba(255,255,255,0.98);
           color: #0b1b2a;
           border-radius: 12px;
@@ -1008,6 +1242,15 @@ export default function App() {
           font-weight: 900;
           line-height: 1.25;
           pointer-events: none;
+        }
+        .gsr-tipBubble::after{
+          content:"";
+          position:absolute;
+          top: 100%;
+          left: 50%;
+          transform: translateX(-50%);
+          border: 8px solid transparent;
+          border-top-color: rgba(255,255,255,0.98);
         }
       `}</style>
 
@@ -1023,14 +1266,14 @@ export default function App() {
             <CurrencyInput value={amount} onChange={setAmount} />
           </div>
 
-          <DatePills label="Start Date (DD/MM/YYYY)" valueIso={startIso} onChangeIso={setStartIso} compact />
+          <DatePills label="Start Date (DD/MM/YYYY)" valueIso={startIsoAdj} onChangeIso={onChangeStartIso} compact />
 
           <div className="gsr-control">
             <span className="gsr-label">Ratio on Start Date</span>
             <div className="gsr-pillReadOnly gsr-pill--small">{startRatio != null ? fmt0(startRatio) : "—"}</div>
           </div>
 
-          <DatePills label="End Date (DD/MM/YYYY)" valueIso={endIso} onChangeIso={setEndIso} compact />
+          <DatePills label="End Date (DD/MM/YYYY)" valueIso={endIsoAdj} onChangeIso={onChangeEndIso} compact />
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
@@ -1044,6 +1287,17 @@ export default function App() {
           <RatioInput label="Gold → Silver" valueText={g2sText} onChangeText={setG2SText} isMobile={isMobile} />
         </section>
 
+        {err && (
+          <p className="gsr-error">
+            Error: {err}
+            {"\n\n"}
+            Quick check:
+            {"\n"}- Ensure CSV is at: public/data/prices.csv
+            {"\n"}- Then stop + restart dev server (Ctrl+C, then npm run dev)
+          </p>
+        )}
+
+        {/* cards */}
         <section className="gsr-cards">
           <div className="gsr-leftStack">
             <div className="gsr-card">
@@ -1054,14 +1308,14 @@ export default function App() {
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip id="gold_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
+                      <InfoTip id="gold_change" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Change in value (USD) for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmtMoney0(stats.gchgC)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip id="gold_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
+                      <InfoTip id="gold_return" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
                   </div>
@@ -1077,14 +1331,14 @@ export default function App() {
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip id="silver_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
+                      <InfoTip id="silver_change" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Change in value (USD) for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmtMoney0(stats.schgC)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip id="silver_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
+                      <InfoTip id="silver_return" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.spct)}%</span>
                   </div>
@@ -1099,46 +1353,32 @@ export default function App() {
 
             <div className="gsr-cardInner">
               <div className="gsr-portfolioGrid">
-                <div className="gsr-muted">
-                  Change:
-                  <InfoTip id="p_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) and percentage return for the selected period." />
-                </div>
-                <div className="right gsr-strong">
-                  {fmtMoney0(stats.pchgC)} | {fmt0(stats.ppct)}%
-                </div>
+                <div className="gsr-muted">Change:</div>
+                <div className="right gsr-strong">{fmtMoney0(stats.pchgC)} | {fmt0(stats.ppct)}%</div>
 
-                <div className="gsr-muted">
-                  Duration:
-                  <InfoTip id="p_duration" activeId={activeTipId} setActiveId={setActiveTipId} text="Total time between your chosen start date and end date (years and months)." />
-                </div>
+                <div className="gsr-muted">Duration:</div>
                 <div className="right gsr-strong">{durationText}</div>
 
-                <div className="gsr-muted">
-                  Beats Gold (Time):
-                  <InfoTip id="p_beats_g" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage of days where My Portfolio value is higher than staying in Gold." />
-                </div>
+                <div className="gsr-muted">Beats Gold (Time):</div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsG)}%</div>
 
-                <div className="gsr-muted">
-                  Beats Silver (Time):
-                  <InfoTip id="p_beats_s" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage of days where My Portfolio value is higher than staying in Silver." />
-                </div>
+                <div className="gsr-muted">Beats Silver (Time):</div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsS)}%</div>
 
-                <div className="gsr-muted">
-                  Switches:
-                  <InfoTip id="p_switches" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of switches between Gold and Silver based on your thresholds." />
-                </div>
-                <div className="right gsr-strong">
-                  {fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}
-                </div>
+                <div className="gsr-muted">vs Gold:</div>
+                <div className="right gsr-strong">{fmt0(stats.diffPg)}%</div>
+
+                <div className="gsr-muted">vs Silver:</div>
+                <div className="right gsr-strong">{fmt0(stats.diffPs)}%</div>
+
+                <div className="gsr-muted">Switches:</div>
+                <div className="right gsr-strong">{fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}</div>
               </div>
             </div>
           </div>
         </section>
 
-        {err && <p className="gsr-error">Error: {err}</p>}
-
+        {/* chart */}
         <div className="gsr-chartWrap">
           <div className="gsr-chartTop">
             <label className="gsr-toggle">
@@ -1170,7 +1410,9 @@ export default function App() {
 
                 <XAxis
                   dataKey="date"
-                  tickFormatter={(d) => (d instanceof Date ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" }) : d)}
+                  tickFormatter={(d) =>
+                    d instanceof Date ? d.toLocaleDateString("en-GB", { year: "2-digit", month: "short" }) : d
+                  }
                   minTickGap={18}
                   tickMargin={10}
                   padding={{ left: 6, right: 6 }}
@@ -1182,13 +1424,20 @@ export default function App() {
                   orientation="left"
                   type="number"
                   scale="linear"
+                  allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
-                  tick={{ fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={leftIsRatio ? ratioDomain : usdDomain}
+                  domain={ratioDomain}
+                  ticks={ratioTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
-                  label={!SHOW_AXIS_LABELS ? undefined : { value: leftLabel, angle: -90, position: "insideLeft", fill: AXIS_COLOR, fontWeight: 900 }}
+                  label={
+                    hideAxisText || !SHOW_AXIS_LABELS
+                      ? undefined
+                      : { value: "Ratio", angle: -90, position: "insideLeft", offset: 0, dy: 0, fill: AXIS_COLOR, fontWeight: 900 }
+                  }
                 />
 
                 <YAxis
@@ -1196,28 +1445,31 @@ export default function App() {
                   orientation="right"
                   type="number"
                   scale="linear"
+                  allowDataOverflow={false}
                   axisLine={{ stroke: AXIS_COLOR }}
-                  tick={{ fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
+                  tickLine={hideAxisText ? false : { stroke: AXIS_COLOR }}
+                  tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={rightIsRatio ? ratioDomain : usdDomain}
+                  domain={usdDomain}
+                  ticks={usdTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
-                  label={!SHOW_AXIS_LABELS ? undefined : { value: rightLabel, angle: 90, position: "insideRight", fill: AXIS_COLOR, fontWeight: 900 }}
+                  label={
+                    hideAxisText || !SHOW_AXIS_LABELS
+                      ? undefined
+                      : { value: "Value (USD)", angle: 90, position: "insideRight", offset: 0, dy: 0, fill: AXIS_COLOR, fontWeight: 900 }
+                  }
                 />
 
                 <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
 
-                {show.gold && <Line name="Gold" yAxisId={usdAxisId} type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
-                {show.silver && <Line name="Silver" yAxisId={usdAxisId} type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
-                {show.strat && <Line name="My Portfolio" yAxisId={usdAxisId} type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
-                {show.gsr && <Line name="GSR" yAxisId={gsrAxisId} type="monotone" dataKey="gsr" stroke="#960019" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />}
+                {show.gold && <Line name="Gold" yAxisId="rightAxis" type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
+                {show.silver && <Line name="Silver" yAxisId="rightAxis" type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
+                {show.strat && <Line name="My Portfolio" yAxisId="rightAxis" type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
+                {show.gsr && <Line name="GSR" yAxisId="leftAxis" type="monotone" dataKey="gsr" stroke="#960019" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "#960019" }} connectNulls isAnimationActive={false} />}
 
-                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(g2s) && (
-                  <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />
-                )}
-                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && Number.isFinite(s2g) && (
-                  <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />
-                )}
+                {show.gsr && g2s != null && <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />}
+                {show.gsr && s2g != null && <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />}
               </LineChart>
             </ResponsiveContainer>
           </div>
