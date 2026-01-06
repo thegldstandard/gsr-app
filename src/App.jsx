@@ -14,25 +14,37 @@ import {
 /* ====================== CONFIG ====================== */
 /** Put CSV at: public/data/prices.csv */
 const CSV_REL_PATH = "data/prices.csv";
-/** Turn ON to top-up latest day (so range extends beyond CSV if needed) */
-const ENABLE_API_TOPUP = true;
+
+/**
+ * ✅ IMPORTANT:
+ * App uses CSV ONLY at runtime (static + identical across devices).
+ * API is NOT called from the browser.
+ */
+const ENABLE_API_TOPUP = false;
+
+/**
+ * ✅ IMPORTANT:
+ * Users are NOT allowed to use "today".
+ * Latest selectable date is yesterday (local time).
+ * Even if CSV contains today, it will be ignored.
+ */
+const DISALLOW_TODAY = true;
 /* ==================================================== */
 
 /* ----------------- helpers ----------------- */
 function parseDMY(dateStr) {
   if (!dateStr) return null;
   const s = String(dateStr).trim();
-
-  // ONLY accept dd/mm/yyyy or dd-mm-yyyy (avoid device-dependent Date parsing)
   const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-  if (!m) return null;
-
-  const dd = +m[1];
-  const mm = +m[2];
-  const yy = m[3];
-  const yyyy = yy.length === 2 ? (+yy > 50 ? 1900 + +yy : 2000 + +yy) : +yy;
-
-  const d = new Date(yyyy, (mm || 1) - 1, dd || 1, 0, 0, 0, 0);
+  if (m) {
+    const dd = +m[1],
+      mm = +m[2],
+      yy = m[3];
+    const yyyy = yy.length === 2 ? (+yy > 50 ? 1900 + +yy : 2000 + +yy) : +yy;
+    const d = new Date(yyyy, (mm || 1) - 1, dd || 1);
+    return isNaN(+d) ? null : d;
+  }
+  const d = new Date(s);
   return isNaN(+d) ? null : d;
 }
 
@@ -66,7 +78,7 @@ const fromIsoLocal = (s) => {
   if (!s) return null;
   const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   return isNaN(+d) ? null : d;
 };
 
@@ -92,11 +104,12 @@ const parseIntOrNull = (s) => {
   return Number.isFinite(n) ? n : null;
 };
 
+const startOfLocalDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
 /* ----------------- UNIVERSAL DETERMINISTIC MATH ----------------- */
 const PRICE_SCALE = 1_000_000n; // micro USD
 const CENTS_TO_MICRO = 10_000n; // 1 cent = 10,000 micro USD
 const OZ_SCALE = 1_000_000_000_000n; // 1e12
-const RATIO_SCALE = 1_000_000n; // ratio scaled to 6dp
 
 const bi = (x) => BigInt(x);
 
@@ -111,7 +124,6 @@ const divRoundHalfUp = (num, den) => {
 
 const toPriceMicro = (priceNumber) => {
   if (!Number.isFinite(priceNumber)) return null;
-  // lock to 6 dp so all devices make the same integer
   const s = Number(priceNumber).toFixed(6);
   const neg = s.startsWith("-");
   const t = neg ? s.slice(1) : s;
@@ -138,13 +150,6 @@ const applyFee97pct = (usdCents) => divRoundHalfUp(bi(usdCents) * 97n, 100n);
 
 const centsToRoundedDollars = (cents) => divRoundHalfUp(bi(cents), 100n);
 const fmtMoney0 = (cents) => `$${fmtInt(centsToRoundedDollars(cents))}`;
-
-// Deterministic ratio calc
-const gsrScaledFromMicros = (goldMicro, silverMicro) => {
-  if (!goldMicro || !silverMicro || silverMicro === 0n) return null;
-  return divRoundHalfUp(goldMicro * RATIO_SCALE, silverMicro);
-};
-const gsrScaledToNumber = (gsrScaled) => (gsrScaled == null ? null : Number(gsrScaled) / 1e6);
 
 /* -------- ticks -------- */
 function niceTicks(min, max, target = 7) {
@@ -195,21 +200,17 @@ function niceTicksWithPadding(min, max, target = 7, padFrac = 0.06, clampMinToZe
   return niceTicks(paddedMin, paddedMax, target);
 }
 
-/* ---- CSV fetch (ROBUST for dev + GH pages + accidental /gsr-app/ in dev) ---- */
+/* ---- CSV fetch: tries BOTH dev + gh-pages paths ---- */
 async function fetchCSVText() {
   const base = (import.meta.env.BASE_URL || "/").replace(/\/?$/, "/");
   const bust = `?v=${Date.now()}`;
 
   const candidates = [
-    `${base}${CSV_REL_PATH}${bust}`,     // GH pages build: /gsr-app/data/prices.csv
-    `/${CSV_REL_PATH}${bust}`,           // dev root: /data/prices.csv
-    `/gsr-app/${CSV_REL_PATH}${bust}`,   // if you opened localhost:5174/gsr-app/
-    `${base}prices.csv${bust}`,
-    `/prices.csv${bust}`,
+    `${base}${CSV_REL_PATH}${bust}`, // gh-pages + base
+    `/${CSV_REL_PATH}${bust}`,       // dev root
   ];
 
   let lastErr = null;
-
   for (const url of candidates) {
     try {
       const res = await fetch(url, { cache: "no-store" });
@@ -220,15 +221,13 @@ async function fetchCSVText() {
 
       const textRaw = await res.text();
 
-      // If we got HTML, we hit index.html fallback => URL not a real file
       if (
         /^\s*<!doctype/i.test(textRaw) ||
         (textRaw.includes("<html") && textRaw.includes("</html>"))
       ) {
         lastErr = new Error(
           `Got HTML instead of CSV from ${url}\n` +
-          `Expected file at: public/data/prices.csv\n` +
-          `Check spelling + location, then restart npm run dev.`
+            `Make sure you have: public/data/prices.csv (and restart npm run dev)`
         );
         continue;
       }
@@ -239,47 +238,7 @@ async function fetchCSVText() {
     }
   }
 
-  throw lastErr || new Error(`prices.csv not found. Expected: public/${CSV_REL_PATH}`);
-}
-
-/* ✅ API top-up (adds “today” row if CSV behind) */
-async function fetchLatestFromAPI() {
-  try {
-    const key = import.meta?.env?.VITE_METAL_API_KEY || "98ce31de34ecaadcd00d49d12137a56a";
-    const url = `https://api.metalpriceapi.com/v1/latest?api_key=${key}&base=USD&currencies=XAU,XAG`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`API HTTP ${res.status}`);
-    const json = await res.json();
-    const rXAU = Number(json?.rates?.XAU);
-    const rXAG = Number(json?.rates?.XAG);
-    if (!(rXAU > 0) || !(rXAG > 0)) throw new Error("API missing XAU/XAG");
-
-    const goldUSD = 1 / rXAU;
-    const silverUSD = 1 / rXAG;
-
-    const today = new Date();
-    const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
-
-    const goldMicro = toPriceMicro(goldUSD);
-    const silverMicro = toPriceMicro(silverUSD);
-    const gsrScaled = gsrScaledFromMicros(goldMicro, silverMicro);
-
-    return {
-      ok: true,
-      row: {
-        date: todayLocal,
-        gold: goldUSD,
-        silver: silverUSD,
-        goldMicro,
-        silverMicro,
-        gsrScaled,
-        gsr: gsrScaledToNumber(gsrScaled),
-      },
-    };
-  } catch (e) {
-    console.warn("MetalPriceAPI latest failed:", e);
-    return { ok: false, error: String(e?.message || e) };
-  }
+  throw lastErr || new Error("prices.csv not found. Expected: public/data/prices.csv");
 }
 
 /* ----------------- mobile sizing hook ----------------- */
@@ -365,7 +324,7 @@ function useViewportMetrics() {
 }
 
 /* ----------------- tooltips ----------------- */
-function InfoTip({ id, activeId, setActiveTipId, text }) {
+function InfoTip({ id, activeId, setActiveId, text }) {
   const open = activeId === id;
   const touchedRef = useRef(false);
 
@@ -373,10 +332,10 @@ function InfoTip({ id, activeId, setActiveTipId, text }) {
     <span
       className="gsr-tipWrap"
       onMouseEnter={() => {
-        if (!touchedRef.current) setActiveTipId(id);
+        if (!touchedRef.current) setActiveId(id);
       }}
       onMouseLeave={() => {
-        if (!touchedRef.current) setActiveTipId(null);
+        if (!touchedRef.current) setActiveId(null);
       }}
     >
       <button
@@ -390,7 +349,7 @@ function InfoTip({ id, activeId, setActiveTipId, text }) {
         }}
         onClick={(e) => {
           e.stopPropagation();
-          setActiveTipId((cur) => (cur === id ? null : id));
+          setActiveId((cur) => (cur === id ? null : id));
         }}
       >
         i
@@ -426,7 +385,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
     const year = clampInt(yyyy, 1900, 2100);
     const lastDay = new Date(year, mon, 0).getDate();
     const safeDay = Math.min(day, lastDay);
-    const finalD = new Date(year, mon - 1, safeDay, 0, 0, 0, 0);
+    const finalD = new Date(year, mon - 1, safeDay);
     onChangeIso(toIsoLocal(finalD));
   };
 
@@ -441,11 +400,29 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
     <div className={`gsr-control ${compact ? "is-compact" : ""}`}>
       <span className="gsr-label">{label}</span>
       <div className={`gsr-datePills ${compact ? "gsr-datePills--compact" : ""}`} onBlur={commit}>
-        <input className="gsr-dateSeg" inputMode="numeric" value={dd} onChange={(e) => setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))} onKeyDown={onKey} />
+        <input
+          className="gsr-dateSeg"
+          inputMode="numeric"
+          value={dd}
+          onChange={(e) => setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
+          onKeyDown={onKey}
+        />
         <span className="gsr-dateSlash">/</span>
-        <input className="gsr-dateSeg" inputMode="numeric" value={mm} onChange={(e) => setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))} onKeyDown={onKey} />
+        <input
+          className="gsr-dateSeg"
+          inputMode="numeric"
+          value={mm}
+          onChange={(e) => setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
+          onKeyDown={onKey}
+        />
         <span className="gsr-dateSlash">/</span>
-        <input className="gsr-dateSeg gsr-dateYear" inputMode="numeric" value={yyyy} onChange={(e) => setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))} onKeyDown={onKey} />
+        <input
+          className="gsr-dateSeg gsr-dateYear"
+          inputMode="numeric"
+          value={yyyy}
+          onChange={(e) => setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
+          onKeyDown={onKey}
+        />
       </div>
     </div>
   );
@@ -608,10 +585,6 @@ export default function App() {
     return n == null ? null : clampInt(n, 0, 999);
   }, [s2gText]);
 
-  // deterministic thresholds (scaled)
-  const g2sScaled = useMemo(() => (g2s == null ? null : bi(g2s) * RATIO_SCALE), [g2s]);
-  const s2gScaled = useMemo(() => (s2g == null ? null : bi(s2g) * RATIO_SCALE), [s2g]);
-
   const AXIS_COLOR = "#0b1b2a";
   const AXIS_WIDTH = isMobile ? 74 : isTablet ? 92 : 120;
   const SHOW_AXIS_LABELS = !isMobile;
@@ -632,12 +605,10 @@ export default function App() {
     return 660;
   }, [isMobile, isTablet, w, h]);
 
-  /* ========= LOAD DATA (CSV + optional API top-up) ========= */
+  /* ========= LOAD DATA (CSV ONLY; ignore "today") ========= */
   useEffect(() => {
     (async () => {
       try {
-        setErr("");
-
         const text = await fetchCSVText();
         const parsed = Papa.parse(text, { header: true, skipEmptyLines: true });
 
@@ -645,39 +616,26 @@ export default function App() {
           .map((o) => {
             const m = {};
             for (const k in o) m[norm(k)] = o[k];
-
             const gold = toNum(m.gold);
             const silver = toNum(m.silver);
             const date = parseDMY(m.date) || parseDMY(m.datetime) || parseDMY(m.day);
-            if (!date || gold == null || silver == null) return null;
-
-            const goldMicro = toPriceMicro(gold);
-            const silverMicro = toPriceMicro(silver);
-            const gsrScaled = gsrScaledFromMicros(goldMicro, silverMicro);
-            const gsr = gsrScaledToNumber(gsrScaled);
-            if (goldMicro == null || silverMicro == null || gsrScaled == null || gsr == null) return null;
-
-            return { date, gold, silver, goldMicro, silverMicro, gsrScaled, gsr };
+            const gsr = gold != null && silver != null && silver !== 0 ? gold / silver : null;
+            return { date, gold, silver, gsr };
           })
-          .filter(Boolean);
+          .filter((d) => d.date && d.gold != null && d.silver != null && d.gsr != null);
 
         mapped.sort((a, b) => a.date - b.date);
 
-        // ✅ top-up latest date from API if CSV is behind today
-        if (ENABLE_API_TOPUP && mapped.length) {
-          const last = mapped[mapped.length - 1].date;
-          const today = new Date();
-          const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+        // ✅ enforce "yesterday only" (static, deterministic)
+        if (DISALLOW_TODAY) {
+          const yesterdayLocal = addDays(startOfLocalDay(new Date()), -1);
+          mapped = mapped.filter((r) => startOfLocalDay(r.date) <= yesterdayLocal);
+        }
 
-          if (last < todayLocal) {
-            const api = await fetchLatestFromAPI();
-            if (api.ok && api.row?.date) {
-              const key = toIsoLocal(api.row.date);
-              const seen = new Set(mapped.map((r) => toIsoLocal(r.date)));
-              if (!seen.has(key)) mapped.push(api.row);
-              mapped.sort((a, b) => a.date - b.date);
-            }
-          }
+        // ✅ App must never use API at runtime
+        // (kept only as a hard guarantee)
+        if (ENABLE_API_TOPUP) {
+          console.warn("ENABLE_API_TOPUP is true, but runtime API usage is disabled in this build.");
         }
 
         setRows(mapped);
@@ -689,7 +647,7 @@ export default function App() {
           setEndIso((s) => s || maxIso);
         }
       } catch (e) {
-        setErr(String(e?.message || e));
+        setErr(String(e.message || e));
       }
     })();
   }, []);
@@ -705,7 +663,7 @@ export default function App() {
     return { minIso: toIsoLocal(rows[0].date), maxIso: toIsoLocal(rows[rows.length - 1].date) };
   }, [rows]);
 
-  // ✅ snap ISO date to nearest available
+  // ✅ snap any ISO date to nearest available (handles weekends/gaps)
   const snapToNearestAvailable = (iso) => {
     if (!iso || !rows.length) return iso;
     if (dateMap.has(iso)) return iso;
@@ -722,6 +680,7 @@ export default function App() {
     return iso;
   };
 
+  // ✅ hard constrain date input to [min,max] and snap to nearest data
   const sanitizeIso = (rawIso) => {
     if (!rawIso || !rows.length) return rawIso;
 
@@ -770,8 +729,8 @@ export default function App() {
     const s = fromIsoLocal(startIsoAdj);
     const e = fromIsoLocal(endIsoAdj);
     if (!s || !e) return [];
-    const start = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0, 0);
-    const end = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59, 999);
+    const start = new Date(s.getFullYear(), s.getMonth(), s.getDate(), 0, 0, 0);
+    const end = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
     return rows.filter((r) => r.date >= start && r.date <= end);
   }, [rows, startIsoAdj, endIsoAdj]);
 
@@ -779,23 +738,35 @@ export default function App() {
     if (!windowed.length) return [];
 
     const start = windowed[0];
+    const goldMicro0 = toPriceMicro(start.gold);
+    const silverMicro0 = toPriceMicro(start.silver);
+    if (!goldMicro0 || !silverMicro0) return [];
+
     const amountCents = bi(amount) * 100n;
 
-    const goldOzScaledBH = amount > 0 && start.gold > 0 ? usdCentsToOuncesScaled(amountCents, start.goldMicro) : 0n;
-    const silverOzScaledBH = amount > 0 && start.silver > 0 ? usdCentsToOuncesScaled(amountCents, start.silverMicro) : 0n;
+    const goldOzScaledBH = amount > 0 && start.gold > 0 ? usdCentsToOuncesScaled(amountCents, goldMicro0) : 0n;
+    const silverOzScaledBH = amount > 0 && start.silver > 0 ? usdCentsToOuncesScaled(amountCents, silverMicro0) : 0n;
 
-    return windowed.map((r) => {
-      const goldValueCents = ouncesScaledToUsdCents(goldOzScaledBH, r.goldMicro);
-      const silverValueCents = ouncesScaledToUsdCents(silverOzScaledBH, r.silverMicro);
+    return windowed
+      .map((r) => {
+        const gMicro = toPriceMicro(r.gold);
+        const sMicro = toPriceMicro(r.silver);
+        if (!gMicro || !sMicro) return null;
 
-      return {
-        ...r,
-        goldValueCents,
-        silverValueCents,
-        goldValue: Number(goldValueCents) / 100,
-        silverValue: Number(silverValueCents) / 100,
-      };
-    });
+        const goldValueCents = ouncesScaledToUsdCents(goldOzScaledBH, gMicro);
+        const silverValueCents = ouncesScaledToUsdCents(silverOzScaledBH, sMicro);
+
+        return {
+          ...r,
+          goldMicro: gMicro,
+          silverMicro: sMicro,
+          goldValueCents,
+          silverValueCents,
+          goldValue: Number(goldValueCents) / 100,
+          silverValue: Number(silverValueCents) / 100,
+        };
+      })
+      .filter(Boolean);
   }, [windowed, amount]);
 
   const withStrategy = useMemo(() => {
@@ -816,21 +787,8 @@ export default function App() {
     const out = valuedRows.map((r, idx) => {
       if (idx > 0) {
         const prev = valuedRows[idx - 1];
-
-        // ✅ deterministic switching using BigInt ratio (no float rounding differences)
-        const up =
-          g2sScaled != null &&
-          prev.gsrScaled != null &&
-          r.gsrScaled != null &&
-          prev.gsrScaled < g2sScaled &&
-          r.gsrScaled >= g2sScaled;
-
-        const down =
-          s2gScaled != null &&
-          prev.gsrScaled != null &&
-          r.gsrScaled != null &&
-          prev.gsrScaled > s2gScaled &&
-          r.gsrScaled <= s2gScaled;
+        const up = Number.isFinite(g2s) && prev.gsr < g2s && r.gsr >= g2s;
+        const down = Number.isFinite(s2g) && prev.gsr > s2g && r.gsr <= s2g;
 
         if (metal === "gold" && up) {
           const usdCents = ouncesScaledToUsdCents(ozGoldScaled, r.goldMicro);
@@ -858,14 +816,14 @@ export default function App() {
     });
 
     return { data: out, endsIn: out[out.length - 1]?.stratMetal || metal };
-  }, [valuedRows, amount, g2sScaled, s2gScaled, startMetal]);
+  }, [valuedRows, amount, g2s, s2g, startMetal]);
 
   const data = withStrategy.data;
 
   const startRatio = useMemo(() => {
     if (!startIsoAdj) return null;
     const r = dateMap.get(startIsoAdj);
-    return r?.gsrScaled != null ? gsrScaledToNumber(r.gsrScaled) : null;
+    return r?.gsr != null && Number.isFinite(r.gsr) ? r.gsr : null;
   }, [dateMap, startIsoAdj]);
 
   const durationText = useMemo(() => {
@@ -1003,7 +961,6 @@ export default function App() {
   const rightLabel = hideAxisText ? "" : rightIsRatio ? "Ratio" : "Value (USD)";
 
   const usdAxisId = axisMode === "USD_BOTH" || axisMode === "MIXED" ? "rightAxis" : "leftAxis";
-  const gsrAxisId = "leftAxis";
 
   const usdHelperKey = useMemo(() => {
     if (show.strat) return "strat";
@@ -1287,15 +1244,7 @@ export default function App() {
           <RatioInput label="Gold → Silver" valueText={g2sText} onChangeText={setG2SText} isMobile={isMobile} />
         </section>
 
-        {err && (
-          <p className="gsr-error">
-            Error: {err}
-            {"\n\n"}
-            Quick check:
-            {"\n"}- Ensure CSV is at: public/data/prices.csv
-            {"\n"}- Then stop + restart dev server (Ctrl+C, then npm run dev)
-          </p>
-        )}
+        {err && <p className="gsr-error">Error: {err}</p>}
 
         {/* cards */}
         <section className="gsr-cards">
@@ -1308,14 +1257,14 @@ export default function App() {
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip id="gold_change" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Change in value (USD) for the selected period." />
+                      <InfoTip id="gold_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmtMoney0(stats.gchgC)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip id="gold_return" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Percentage return for the selected period." />
+                      <InfoTip id="gold_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
                   </div>
@@ -1331,14 +1280,14 @@ export default function App() {
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Change:
-                      <InfoTip id="silver_change" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Change in value (USD) for the selected period." />
+                      <InfoTip id="silver_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmtMoney0(stats.schgC)}</span>
                   </div>
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
-                      <InfoTip id="silver_return" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Percentage return for the selected period." />
+                      <InfoTip id="silver_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.spct)}%</span>
                   </div>
@@ -1353,25 +1302,46 @@ export default function App() {
 
             <div className="gsr-cardInner">
               <div className="gsr-portfolioGrid">
-                <div className="gsr-muted">Change:</div>
+                <div className="gsr-muted">
+                  Change:
+                  <InfoTip id="p_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) and percentage return for the selected period." />
+                </div>
                 <div className="right gsr-strong">{fmtMoney0(stats.pchgC)} | {fmt0(stats.ppct)}%</div>
 
-                <div className="gsr-muted">Duration:</div>
+                <div className="gsr-muted">
+                  Duration:
+                  <InfoTip id="p_duration" activeId={activeTipId} setActiveId={setActiveTipId} text="Total time between your chosen start date and end date (years and months)." />
+                </div>
                 <div className="right gsr-strong">{durationText}</div>
 
-                <div className="gsr-muted">Beats Gold (Time):</div>
+                <div className="gsr-muted">
+                  Beats Gold (Time):
+                  <InfoTip id="p_beats_g" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage of days where My Portfolio value is higher than staying in Gold." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsG)}%</div>
 
-                <div className="gsr-muted">Beats Silver (Time):</div>
+                <div className="gsr-muted">
+                  Beats Silver (Time):
+                  <InfoTip id="p_beats_s" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage of days where My Portfolio value is higher than staying in Silver." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.pBeatsS)}%</div>
 
-                <div className="gsr-muted">vs Gold:</div>
+                <div className="gsr-muted">
+                  vs Gold:
+                  <InfoTip id="p_vs_g" activeId={activeTipId} setActiveId={setActiveTipId} text="My Portfolio return minus Gold-only return (percentage points)." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPg)}%</div>
 
-                <div className="gsr-muted">vs Silver:</div>
+                <div className="gsr-muted">
+                  vs Silver:
+                  <InfoTip id="p_vs_s" activeId={activeTipId} setActiveId={setActiveTipId} text="My Portfolio return minus Silver-only return (percentage points)." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.diffPs)}%</div>
 
-                <div className="gsr-muted">Switches:</div>
+                <div className="gsr-muted">
+                  Switches:
+                  <InfoTip id="p_switches" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of switches between Gold and Silver based on your thresholds." />
+                </div>
                 <div className="right gsr-strong">{fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}</div>
               </div>
             </div>
@@ -1430,13 +1400,13 @@ export default function App() {
                   tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={ratioDomain}
-                  ticks={ratioTicks}
+                  domain={leftIsRatio ? ratioDomain : usdDomain}
+                  ticks={leftIsRatio ? ratioTicks : usdTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
                     hideAxisText || !SHOW_AXIS_LABELS
                       ? undefined
-                      : { value: "Ratio", angle: -90, position: "insideLeft", offset: 0, dy: 0, fill: AXIS_COLOR, fontWeight: 900 }
+                      : { value: leftLabel, angle: -90, position: "insideLeft", offset: 0, dy: 0, fill: AXIS_COLOR, fontWeight: 900 }
                   }
                 />
 
@@ -1451,25 +1421,32 @@ export default function App() {
                   tick={hideAxisText ? false : { fill: AXIS_COLOR, fontWeight: 900, fontSize: yTickFont }}
                   tickMargin={yTickMargin}
                   width={AXIS_WIDTH}
-                  domain={usdDomain}
-                  ticks={usdTicks}
+                  domain={rightIsRatio ? ratioDomain : usdDomain}
+                  ticks={rightIsRatio ? ratioTicks : usdTicks}
                   tickFormatter={(v) => fmt0(Number(v))}
                   label={
                     hideAxisText || !SHOW_AXIS_LABELS
                       ? undefined
-                      : { value: "Value (USD)", angle: 90, position: "insideRight", offset: 0, dy: 0, fill: AXIS_COLOR, fontWeight: 900 }
+                      : { value: rightLabel, angle: 90, position: "insideRight", offset: 0, dy: 0, fill: AXIS_COLOR, fontWeight: 900 }
                   }
                 />
 
                 <Tooltip content={<CustomTooltip />} cursor={{ strokeOpacity: 0.25 }} isAnimationActive={false} />
 
-                {show.gold && <Line name="Gold" yAxisId="rightAxis" type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
-                {show.silver && <Line name="Silver" yAxisId="rightAxis" type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
-                {show.strat && <Line name="My Portfolio" yAxisId="rightAxis" type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
+                {show.gold && <Line name="Gold" yAxisId={usdAxisId} type="monotone" dataKey="goldValue" stroke="#f2c36b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
+                {show.silver && <Line name="Silver" yAxisId={usdAxisId} type="monotone" dataKey="silverValue" stroke="#0e2d4a" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
+                {show.strat && <Line name="My Portfolio" yAxisId={usdAxisId} type="monotone" dataKey="strat" stroke="#a77d52" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />}
                 {show.gsr && <Line name="GSR" yAxisId="leftAxis" type="monotone" dataKey="gsr" stroke="#960019" strokeWidth={2} dot={false} activeDot={{ r: 4, fill: "#960019" }} connectNulls isAnimationActive={false} />}
 
-                {show.gsr && g2s != null && <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />}
-                {show.gsr && s2g != null && <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />}
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && g2s != null && <ReferenceLine yAxisId="leftAxis" y={g2s} stroke="#94a3b8" strokeDasharray="4 4" />}
+                {(axisMode === "RATIO_BOTH" || axisMode === "MIXED") && show.gsr && s2g != null && <ReferenceLine yAxisId="leftAxis" y={s2g} stroke="#94a3b8" strokeDasharray="4 4" />}
+
+                {axisMode === "USD_BOTH" && (
+                  <Line name="__axis_helper__usd_left__" yAxisId="leftAxis" dataKey={usdHelperKey} type="monotone" stroke="transparent" strokeWidth={1} dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls isAnimationActive={false} />
+                )}
+                {axisMode === "RATIO_BOTH" && show.gsr && (
+                  <Line name="__axis_helper__ratio_right__" yAxisId="rightAxis" dataKey="gsr" type="monotone" stroke="transparent" strokeWidth={1} dot={false} activeDot={false} legendType="none" tooltipType="none" connectNulls isAnimationActive={false} />
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>
