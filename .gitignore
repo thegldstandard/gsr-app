@@ -2,3 +2,11 @@
 dist
 .env
 .DS_Store
+
+# --- local backups ---
+*.bak
+*.bak_*
+src/*.bak
+src/*.bak_*
+src/App.jsx.bak
+src/App.jsx.bak_*
