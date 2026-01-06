@@ -1,6 +1,26 @@
 ﻿import React, { useEffect, useMemo, useState, useRef } from "react";
 import Papa from "papaparse";
 import {
+
+const dmyToISO = (dmy) => {
+  const m = String(dmy || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return "";
+  const dd = m[1], mm = m[2], yyyy = m[3];
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const clampISODate = (iso, minIso, maxIso) => {
+  if (!iso) return iso;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+
+  const minT = Date.parse(minIso);
+  const maxT = Date.parse(maxIso);
+
+  if (Number.isFinite(minT) && t < minT) return minIso;
+  if (Number.isFinite(maxT) && t > maxT) return maxIso;
+  return iso;
+};
   ResponsiveContainer,
   LineChart,
   Line,
@@ -562,6 +582,20 @@ export default function App() {
   }, []);
 
   const [rows, setRows] = useState([]);
+const { minISO, maxISO } = useMemo(() => {
+  if (!Array.isArray(rows) || rows.length === 0) return { minISO: "", maxISO: "" };
+
+  const isValidISO = (iso) => Number.isFinite(Date.parse(iso));
+
+  const isos = rows
+    .map(r => dmyToISO(r.date ?? r.Date ?? r.DATE))
+    .filter(iso => iso && isValidISO(iso))
+    .sort(); // YYYY-MM-DD sorts lexicographically
+
+  if (isos.length === 0) return { minISO: "", maxISO: "" };
+  return { minISO: isos[0], maxISO: isos[isos.length - 1] };
+}, [rows]);
+
   const [err, setErr] = useState("");
 
   const [show, setShow] = useState({ gold: true, silver: true, strat: true, gsr: true });
@@ -1455,3 +1489,4 @@ export default function App() {
     </div>
   );
 }
+
