@@ -387,6 +387,34 @@ function InfoTip({ id, activeId, setActiveId, text }) {
 
 /* ----------------- DD/MM/YYYY pill input ----------------- */
 function DatePills({ label, valueIso, onChangeIso, compact = false }) {
+  // --- Snap date pills to available CSV range (minISO/maxISO) ---
+  const isoFromParts = (d, m, y) => {
+    const dd2 = String(d || "").padStart(2, "0");
+    const mm2 = String(m || "").padStart(2, "0");
+    const yy4 = String(y || "");
+    if (dd2.length !== 2 || mm2.length !== 2 || yy4.length !== 4) return "";
+    return `${yy4}-${mm2}-${dd2}`;
+  };
+
+  const setPartsFromISO = (iso) => {
+    const mm = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!mm) return;
+    setYyyy(mm[1]);
+    setMm(mm[2]);
+    setDd(mm[3]);
+  };
+
+  const commitSnap = () => {
+    const rawIso = isoFromParts(dd, mm, yyyy);
+    if (!rawIso) return;
+    if (!minISO || !maxISO) return;
+
+    const clamped = clampISODate(rawIso, minISO, maxISO);
+    // push to parent + snap UI to clamped value
+    if (clamped !== valueIso) onChangeIso(clamped);
+    setPartsFromISO(clamped);
+  };
+
   const d = useMemo(() => fromIsoLocal(valueIso) || new Date(2000, 0, 1), [valueIso]);
   const [dd, setDd] = useState(pad2(d.getDate()));
   const [mm, setMm] = useState(pad2(d.getMonth() + 1));
@@ -414,7 +442,9 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
     if (e.key === "Enter") {
       e.currentTarget.blur();
       commit();
-    }
+    
+    if (e.key === "Enter") { commitSnap(); }
+  }
   };
 
   return (
@@ -425,7 +455,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
           className="gsr-dateSeg"
           inputMode="numeric"
           value={dd}
-          onChange={(e) => setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
+          onChange={(e) = onBlur={commitSnap}> setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
           onKeyDown={onKey}
         />
         <span className="gsr-dateSlash">/</span>
@@ -433,7 +463,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
           className="gsr-dateSeg"
           inputMode="numeric"
           value={mm}
-          onChange={(e) => setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
+          onChange={(e) = onBlur={commitSnap}> setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
           onKeyDown={onKey}
         />
         <span className="gsr-dateSlash">/</span>
@@ -441,7 +471,7 @@ function DatePills({ label, valueIso, onChangeIso, compact = false }) {
           className="gsr-dateSeg gsr-dateYear"
           inputMode="numeric"
           value={yyyy}
-          onChange={(e) => setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
+          onChange={(e) = onBlur={commitSnap}> setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
           onKeyDown={onKey}
         />
       </div>
@@ -1543,6 +1573,7 @@ const [err, setErr] = useState("");
     </div>
   );
 }
+
 
 
 
