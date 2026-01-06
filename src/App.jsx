@@ -12,43 +12,11 @@ import {
   Tooltip,
 } from "recharts";
 
-const dmyToISO = (value) => {
-  const s = String(value ?? "").trim();
-  if (!s) return "";
-
-  // Already ISO: YYYY-MM-DD
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-
-  // UK style: D/M/YYYY or DD/MM/YYYY (allow 1-2 digit day/month)
-  const dmy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (dmy) {
-    const dd = dmy[1].padStart(2, "0");
-    const mm = dmy[2].padStart(2, "0");
-    const yyyy = dmy[3];
-    return `${yyyy}-${mm}-${dd}`;
-  }
-
-  // US-ish style: M/D/YYYY or MM/DD/YYYY (only if present in your data; keep as fallback)
-  const mdy = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
-  if (mdy) {
-    const mm = mdy[1].padStart(2, "0");
-    const dd = mdy[2].padStart(2, "0");
-    const yyyy = mdy[3];
-    return `${yyyy}-${mm}-${dd}`;
-  }
-
-  // Last resort: try Date.parse and format to YYYY-MM-DD in local time
-  const t = Date.parse(s);
-  if (Number.isFinite(t)) {
-    const d = new Date(t);
-    const yyyy = String(d.getFullYear());
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
-  }
-
-  return "";
+const dmyToISO = (dmy) => {
+  const m = String(dmy || "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return "";
+  const dd = m[1], mm = m[2], yyyy = m[3];
+  return `${yyyy}-${mm}-${dd}`;
 };
 
 const clampISODate = (iso, minIso, maxIso) => {
@@ -1522,7 +1490,6 @@ const { minISO, maxISO } = useMemo(() => {
     </div>
   );
 }
-
 
 
 
