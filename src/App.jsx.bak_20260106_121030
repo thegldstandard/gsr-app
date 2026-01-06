@@ -386,73 +386,47 @@ function InfoTip({ id, activeId, setActiveId, text }) {
 }
 
 /* ----------------- DD/MM/YYYY pill input ----------------- */
-function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "", maxISO = "" }) {
-  const iso = valueIso || "";
+function DatePills({ label, valueIso, onChangeIso, compact = false }) {
+  const d = useMemo(() => fromIsoLocal(valueIso) || new Date(2000, 0, 1), [valueIso]);
+  const [dd, setDd] = useState(pad2(d.getDate()));
+  const [mm, setMm] = useState(pad2(d.getMonth() + 1));
+  const [yyyy, setYyyy] = useState(String(d.getFullYear()));
 
-  const [dd, setDd] = useState("");
-  const [mm, setMm] = useState("");
-  const [yyyy, setYyyy] = useState("");
-
-  // Keep the pills in sync with incoming ISO
   useEffect(() => {
-    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return;
-    setYyyy(m[1]);
-    setMm(m[2]);
-    setDd(m[3]);
-  }, [iso]);
-
-  // ---- date helpers (DD/MM/YYYY <-> ISO) ----
-  const isoFromParts = (d, m, y) => {
-    const dd2 = String(d || "").padStart(2, "0");
-    const mm2 = String(m || "").padStart(2, "0");
-    const yy4 = String(y || "");
-    if (dd2.length !== 2 || mm2.length !== 2 || yy4.length !== 4) return "";
-    return `${yy4}-${mm2}-${dd2}`;
-  };
-
-  const setPartsFromISO = (v) => {
-    const m = String(v || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (!m) return;
-    setYyyy(m[1]);
-    setMm(m[2]);
-    setDd(m[3]);
-  };
-
+    const x = fromIsoLocal(valueIso);
+    if (!x) return;
+    setDd(pad2(x.getDate()));
+    setMm(pad2(x.getMonth() + 1));
+    setYyyy(String(x.getFullYear()));
+  }, [valueIso]);
 
   const commit = () => {
-    const rawIso = isoFromParts(dd, mm, yyyy);
-    if (!rawIso) return;
-
-    // Always clamp to bounds if available
-    const next = clampISODate(rawIso, minISO, maxISO);
-    console.log("[DatePills commit]", { rawIso, minISO, maxISO, iso, next });
-
-    // Push up + also force the pills to reflect the clamped result
-    if (next !== iso) onChangeIso(next);
-    setPartsFromISO(next);
+    const day = clampInt(dd, 1, 31);
+    const mon = clampInt(mm, 1, 12);
+    const year = clampInt(yyyy, 1900, 2100);
+    const lastDay = new Date(year, mon, 0).getDate();
+    const safeDay = Math.min(day, lastDay);
+    const finalD = new Date(year, mon - 1, safeDay);
+    onChangeIso(toIsoLocal(finalD));
   };
 
   const onKey = (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    e.currentTarget.blur();
-    if (typeof commit === "function") commit();
-}
-};
+    if (e.key === "Enter") {
+      e.currentTarget.blur();
+      commit();
+    }
+  };
 
   return (
     <div className={`gsr-control ${compact ? "is-compact" : ""}`}>
       <span className="gsr-label">{label}</span>
-      <div className={`gsr-datePills ${compact ? "gsr-datePills--compact" : ""}`} onBlur={() => { if (typeof commit === "function") commit();
-}}>
+      <div className={`gsr-datePills ${compact ? "gsr-datePills--compact" : ""}`} onBlur={commit}>
         <input
           className="gsr-dateSeg"
           inputMode="numeric"
           value={dd}
           onChange={(e) => setDd(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
           onKeyDown={onKey}
-          onBlur={commit}
         />
         <span className="gsr-dateSlash">/</span>
         <input
@@ -461,29 +435,14 @@ function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "",
           value={mm}
           onChange={(e) => setMm(e.target.value.replace(/[^\d]/g, "").slice(0, 2))}
           onKeyDown={onKey}
-          onBlur={commit}
         />
         <span className="gsr-dateSlash">/</span>
         <input
           className="gsr-dateSeg gsr-dateYear"
           inputMode="numeric"
           value={yyyy}
-          onChange={(e) => {
-            const v = e.target.value.replace(/[^\d]/g, "").slice(0, 4);
-            setYyyy(v);
-
-            // snap as soon as YYYY is complete (no need to blur/press Enter)
-            if (v.length === 4 && dd.length === 2 && mm.length === 2) {
-              const rawIso = isoFromParts(dd, mm, v);
-              if (!rawIso) return;
-
-              const next = clampISODate(rawIso, minISO, maxISO);
-              if (next !== iso) onChangeIso(next);
-              setPartsFromISO(next);
-            }
-          }}
+          onChange={(e) => setYyyy(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
           onKeyDown={onKey}
-          onBlur={commit}
         />
       </div>
     </div>
@@ -528,8 +487,8 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
     <div className="gsr-control">
       <span className="gsr-label">{label}</span>
       <div className={`gsr-stepper ${isMobile ? "is-mobile" : ""}`}>
-        <input type="number"
-          className="gsr-pill gsr-pill--small gsr-stepperInput gsr-pillNumber"
+        <input
+          className="gsr-pill gsr-pill--small gsr-stepperInput"
           type="number"
           inputMode="numeric"
           step={step}
@@ -627,52 +586,24 @@ export default function App() {
 const { minISO, maxISO } = useMemo(() => {
   if (!Array.isArray(rows) || rows.length === 0) return { minISO: "", maxISO: "" };
 
-  // Use the same conversion logic already used elsewhere (avoids Date.parse locale issues)
-  const minISO = toIsoLocal(rows[0].date);
-  const maxISO = toIsoLocal(rows[rows.length - 1].date);
+  const isValidISO = (iso) => Number.isFinite(Date.parse(iso));
 
-  return { minISO, maxISO };
+  const isos = rows
+    .map(r => dmyToISO(r.date ?? r.Date ?? r.DATE))
+    .filter(iso => iso && isValidISO(iso))
+    .sort(); // YYYY-MM-DD sorts lexicographically
+
+  if (isos.length === 0) return { minISO: "", maxISO: "" };
+  return { minISO: isos[0], maxISO: isos[isos.length - 1] };
 }, [rows]);
 
-
-
-
-
-useEffect(() => {
-  console.log("minISO/maxISO", minISO, maxISO, "rowsLen", Array.isArray(rows) ? rows.length : null);
-}, [minISO, maxISO, rows]);
-useEffect(() => {
-  console.log("minISO/maxISO", { minISO, maxISO, rowsLen: Array.isArray(rows) ? rows.length : null });
-}, [minISO, maxISO, rows]);
-const [err, setErr] = useState("");
+  const [err, setErr] = useState("");
 
   const [show, setShow] = useState({ gold: true, silver: true, strat: true, gsr: true });
   const [amount, setAmount] = useState(1000);
 
   const [startIso, setStartIso] = useState("");
   const [endIso, setEndIso] = useState("");
-
-  // Clamp: keep ISO date range within available CSV dates + enforce start <= end
-  useEffect(() => {
-    if (!minISO || !maxISO) return;
-    if (startIso) {
-      const s = clampISODate(startIso, minISO, maxISO);
-      if (s !== startIso) setStartIso(s);
-    }
-    if (endIso) {
-      const e = clampISODate(endIso, minISO, maxISO);
-      if (e !== endIso) setEndIso(e);
-    }
-
-    if (startIso && endIso) {
-      const sT = Date.parse(startIso);
-      const eT = Date.parse(endIso);
-      if (Number.isFinite(sT) && Number.isFinite(eT) && sT > eT) {
-        setEndIso(startIso);
-      }
-    }
-  }, [minISO, maxISO, startIso, endIso]);
-
 
   const [g2sText, setG2SText] = useState("85");
   const [s2gText, setS2GText] = useState("65");
@@ -800,23 +731,29 @@ const [err, setErr] = useState("");
     return iso;
   };
 
-  const onChangeStartIso = (iso) => {
-  if (!iso) return;
+  const onChangeStartIso = (rawIso) => {
+    const nextStart = sanitizeIso(rawIso);
+    setStartIso(nextStart);
 
-  let next = clampISODate(iso, minISO, maxISO);
-  next = snapToNearestAvailable(next);
+    setEndIso((curEnd) => {
+      const endSan = sanitizeIso(curEnd);
+      if (!endSan) return endSan;
+      if (nextStart && endSan < nextStart) return nextStart;
+      return endSan;
+    });
+  };
 
-  if (next !== startIso) setStartIso(next);
-};
+  const onChangeEndIso = (rawIso) => {
+    const nextEnd = sanitizeIso(rawIso);
+    setEndIso(nextEnd);
 
-  const onChangeEndIso = (iso) => {
-  if (!iso) return;
-
-  let next = clampISODate(iso, minISO, maxISO);
-  next = snapToNearestAvailable(next);
-
-  if (next !== endIso) setEndIso(next);
-};
+    setStartIso((curStart) => {
+      const startSan = sanitizeIso(curStart);
+      if (!startSan) return startSan;
+      if (nextEnd && startSan > nextEnd) return nextEnd;
+      return startSan;
+    });
+  };
 
   const { startIsoAdj, endIsoAdj } = useMemo(() => {
     return { startIsoAdj: sanitizeIso(startIso), endIsoAdj: sanitizeIso(endIso) };
@@ -1321,14 +1258,14 @@ const [err, setErr] = useState("");
             <CurrencyInput value={amount} onChange={setAmount} />
           </div>
 
-          <DatePills minISO={minISO} maxISO={maxISO} label="Start Date (DD/MM/YYYY)" valueIso={startIsoAdj} onChangeIso={onChangeStartIso} compact />
+          <DatePills label="Start Date (DD/MM/YYYY)" valueIso={startIsoAdj} onChangeIso={onChangeStartIso} compact />
 
           <div className="gsr-control">
             <span className="gsr-label">Ratio on Start Date</span>
             <div className="gsr-pillReadOnly gsr-pill--small">{startRatio != null ? fmt0(startRatio) : "—"}</div>
           </div>
 
-          <DatePills minISO={minISO} maxISO={maxISO} label="End Date (DD/MM/YYYY)" valueIso={endIsoAdj} onChangeIso={onChangeEndIso} compact />
+          <DatePills label="End Date (DD/MM/YYYY)" valueIso={endIsoAdj} onChangeIso={onChangeEndIso} compact />
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
@@ -1553,30 +1490,6 @@ const [err, setErr] = useState("");
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

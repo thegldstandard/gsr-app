@@ -528,8 +528,8 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
     <div className="gsr-control">
       <span className="gsr-label">{label}</span>
       <div className={`gsr-stepper ${isMobile ? "is-mobile" : ""}`}>
-        <input type="number"
-          className="gsr-pill gsr-pill--small gsr-stepperInput gsr-pillNumber"
+        <input
+          className="gsr-pill gsr-pill--small gsr-stepperInput"
           type="number"
           inputMode="numeric"
           step={step}
@@ -1553,7 +1553,6 @@ const [err, setErr] = useState("");
     </div>
   );
 }
-
 
 
 
