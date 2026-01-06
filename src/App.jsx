@@ -386,7 +386,7 @@ function InfoTip({ id, activeId, setActiveId, text }) {
 }
 
 /* ----------------- DD/MM/YYYY pill input ----------------- */
-function DatePills({ label, valueIso, onChangeIso, compact = false }) {
+function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "", maxISO = ""}) {
   const iso = valueIso || "";
 
   // --- Snap date pills to available CSV range (minISO/maxISO) ---
@@ -1575,6 +1575,7 @@ const [err, setErr] = useState("");
     </div>
   );
 }
+
 
 
 
