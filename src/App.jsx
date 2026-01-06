@@ -1409,7 +1409,7 @@ const { minISO, maxISO } = useMemo(() => {
           </div>
 
           <div className="gsr-chartInner">
-            <ResponsiveContainer width="100%" height="100%" debounce={0} key={chartRemountKey}>
+            <ResponsiveContainer width="100%" height="100%" debounce={0}>
               <LineChart data={data} margin={CHART_MARGIN}>
                 <CartesianGrid strokeDasharray="3 3" strokeOpacity={0.1} />
 
@@ -1490,5 +1490,6 @@ const { minISO, maxISO } = useMemo(() => {
     </div>
   );
 }
+
 
 
