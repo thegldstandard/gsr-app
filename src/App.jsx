@@ -1269,7 +1269,7 @@ const { minISO, maxISO } = useMemo(() => {
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
-            <select className="gsr-pill gsr-pillSelect gsr-pill--small" value={startMetal} onChange={(e) => setStartMetal(e.target.value)}>
+            <select className="gsr-pill gsr-pillSelect gsr-pill--small" value={startMetal} onChange={(e) => setStartMetal(clampISODate(e.target.value, minISO, maxISO))}>
               <option value="gold">Gold</option>
               <option value="silver">Silver</option>
             </select>
@@ -1490,6 +1490,7 @@ const { minISO, maxISO } = useMemo(() => {
     </div>
   );
 }
+
 
 
 
