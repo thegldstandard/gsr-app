@@ -605,6 +605,29 @@ const { minISO, maxISO } = useMemo(() => {
   const [startIso, setStartIso] = useState("");
   const [endIso, setEndIso] = useState("");
 
+  // Clamp: keep ISO date range within available CSV dates + enforce start <= end
+  useEffect(() => {
+    if (!minISO || !maxISO) return;
+
+    if (startIso) {
+      const s = clampISODate(startIso, minISO, maxISO);
+      if (s !== startIso) setStartIso(s);
+    }
+    if (endIso) {
+      const e = clampISODate(endIso, minISO, maxISO);
+      if (e !== endIso) setEndIso(e);
+    }
+
+    if (startIso && endIso) {
+      const sT = Date.parse(startIso);
+      const eT = Date.parse(endIso);
+      if (Number.isFinite(sT) && Number.isFinite(eT) && sT > eT) {
+        setEndIso(startIso);
+      }
+    }
+  }, [minISO, maxISO, startIso, endIso]);
+
+
   const [g2sText, setG2SText] = useState("85");
   const [s2gText, setS2GText] = useState("65");
 
@@ -1490,6 +1513,7 @@ const { minISO, maxISO } = useMemo(() => {
     </div>
   );
 }
+
 
 
 
