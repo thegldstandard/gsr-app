@@ -586,10 +586,40 @@ export default function App() {
 const { minISO, maxISO } = useMemo(() => {
   if (!Array.isArray(rows) || rows.length === 0) return { minISO: "", maxISO: "" };
 
+  const looksLikeDate = (v) => {
+    if (typeof v !== "string") return false;
+    const s = v.trim();
+    if (!s) return false;
+    // ISO YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return true;
+    // D/M/YYYY or DD/MM/YYYY
+    if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return true;
+    // Also allow DD-MM-YYYY / MM-DD-YYYY variants that your dmyToISO might handle
+    if (/^\d{1,2}-\d{1,2}-\d{4}$/.test(s)) return true;
+    return false;
+  };
+
+  const pickDateValueFromRow = (r) => {
+    if (!r || typeof r !== "object") return "";
+    // First try obvious keys (keeps old behavior fast)
+    const direct =
+      r.date ?? r.Date ?? r.DATE ??
+      r.datetime ?? r.DateTime ?? r.DATETIME ??
+      r.timestamp ?? r.Timestamp ?? r.TIMESTAMP;
+    if (typeof direct === "string" && looksLikeDate(direct)) return direct;
+
+    // Otherwise scan all values for something date-like
+    for (const k of Object.keys(r)) {
+      const v = r[k];
+      if (typeof v === "string" && looksLikeDate(v)) return v;
+    }
+    return "";
+  };
+
   const isValidISO = (iso) => Number.isFinite(Date.parse(iso));
 
   const isos = rows
-    .map(r => dmyToISO(r.date ?? r.Date ?? r.DATE))
+    .map(r => dmyToISO(pickDateValueFromRow(r)))
     .filter(iso => iso && isValidISO(iso))
     .sort(); // YYYY-MM-DD sorts lexicographically
 
@@ -597,7 +627,7 @@ const { minISO, maxISO } = useMemo(() => {
   return { minISO: isos[0], maxISO: isos[isos.length - 1] };
 }, [rows]);
 
-  const [err, setErr] = useState("");
+const [err, setErr] = useState("");
 
   const [show, setShow] = useState({ gold: true, silver: true, strat: true, gsr: true });
   const [amount, setAmount] = useState(1000);
@@ -1513,6 +1543,7 @@ const { minISO, maxISO } = useMemo(() => {
     </div>
   );
 }
+
 
 
 
