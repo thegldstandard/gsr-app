@@ -1,7 +1,6 @@
 ﻿import React, { useEffect, useMemo, useState, useRef } from "react";
 import Papa from "papaparse";
 import {
-
   ResponsiveContainer,
   LineChart,
   Line,
@@ -419,7 +418,6 @@ function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "",
     setDd(m[3]);
   };
 
-
   const commit = () => {
     const rawIso = isoFromParts(dd, mm, yyyy);
     if (!rawIso) return;
@@ -434,18 +432,22 @@ function DatePills({ label, valueIso, onChangeIso, compact = false, minISO = "",
   };
 
   const onKey = (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    e.currentTarget.blur();
-    if (typeof commit === "function") commit();
-}
-};
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.currentTarget.blur();
+      if (typeof commit === "function") commit();
+    }
+  };
 
   return (
     <div className={`gsr-control ${compact ? "is-compact" : ""}`}>
       <span className="gsr-label">{label}</span>
-      <div className={`gsr-datePills ${compact ? "gsr-datePills--compact" : ""}`} onBlur={() => { if (typeof commit === "function") commit();
-}}>
+      <div
+        className={`gsr-datePills ${compact ? "gsr-datePills--compact" : ""}`}
+        onBlur={() => {
+          if (typeof commit === "function") commit();
+        }}
+      >
         <input
           className="gsr-dateSeg"
           inputMode="numeric"
@@ -528,7 +530,8 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
     <div className="gsr-control">
       <span className="gsr-label">{label}</span>
       <div className={`gsr-stepper ${isMobile ? "is-mobile" : ""}`}>
-        <input type="text"
+        <input
+          type="text"
           className="gsr-pill gsr-pill--small gsr-stepperInput gsr-pillNumber"
           inputMode="numeric"
           step={step}
@@ -547,8 +550,12 @@ function RatioInput({ label, valueText, onChangeText, isMobile, min = 0, max = 9
           }}
         />
         <div className="gsr-stepperBtns">
-          <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)}>▲</button>
-          <button type="button" className="gsr-stepBtn" onClick={() => bump(-1)}>▼</button>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(+1)}>
+            ▲
+          </button>
+          <button type="button" className="gsr-stepBtn" onClick={() => bump(-1)}>
+            ▼
+          </button>
         </div>
       </div>
     </div>
@@ -583,7 +590,17 @@ function CustomTooltip({ active, label, payload }) {
     .filter((r) => !String(r.name).startsWith("__axis_helper__"));
 
   return (
-    <div style={{ background: "rgba(255,255,255,0.96)", borderRadius: 12, padding: "10px 12px", color: "#0b1b2a", boxShadow: "0 10px 25px rgba(0,0,0,0.22)", minWidth: 220, maxWidth: 340 }}>
+    <div
+      style={{
+        background: "rgba(255,255,255,0.96)",
+        borderRadius: 12,
+        padding: "10px 12px",
+        color: "#0b1b2a",
+        boxShadow: "0 10px 25px rgba(0,0,0,0.22)",
+        minWidth: 220,
+        maxWidth: 340,
+      }}
+    >
       <div style={{ fontWeight: 1000, marginBottom: 8 }}>{labelText}</div>
       <div style={{ display: "grid", gap: 6 }}>
         {rows.map((r) => (
@@ -623,27 +640,23 @@ export default function App() {
   }, []);
 
   const [rows, setRows] = useState([]);
-const { minISO, maxISO } = useMemo(() => {
-  if (!Array.isArray(rows) || rows.length === 0) return { minISO: "", maxISO: "" };
+  const { minISO, maxISO } = useMemo(() => {
+    if (!Array.isArray(rows) || rows.length === 0) return { minISO: "", maxISO: "" };
 
-  // Use the same conversion logic already used elsewhere (avoids Date.parse locale issues)
-  const minISO = toIsoLocal(rows[0].date);
-  const maxISO = toIsoLocal(rows[rows.length - 1].date);
+    // Use the same conversion logic already used elsewhere (avoids Date.parse locale issues)
+    const minISO = toIsoLocal(rows[0].date);
+    const maxISO = toIsoLocal(rows[rows.length - 1].date);
 
-  return { minISO, maxISO };
-}, [rows]);
+    return { minISO, maxISO };
+  }, [rows]);
 
-
-
-
-
-useEffect(() => {
-  console.log("minISO/maxISO", minISO, maxISO, "rowsLen", Array.isArray(rows) ? rows.length : null);
-}, [minISO, maxISO, rows]);
-useEffect(() => {
-  console.log("minISO/maxISO", { minISO, maxISO, rowsLen: Array.isArray(rows) ? rows.length : null });
-}, [minISO, maxISO, rows]);
-const [err, setErr] = useState("");
+  useEffect(() => {
+    console.log("minISO/maxISO", minISO, maxISO, "rowsLen", Array.isArray(rows) ? rows.length : null);
+  }, [minISO, maxISO, rows]);
+  useEffect(() => {
+    console.log("minISO/maxISO", { minISO, maxISO, rowsLen: Array.isArray(rows) ? rows.length : null });
+  }, [minISO, maxISO, rows]);
+  const [err, setErr] = useState("");
 
   const [show, setShow] = useState({ gold: true, silver: true, strat: true, gsr: true });
   const [amount, setAmount] = useState(1000);
@@ -671,7 +684,6 @@ const [err, setErr] = useState("");
       }
     }
   }, [minISO, maxISO, startIso, endIso]);
-
 
   const [g2sText, setG2SText] = useState("85");
   const [s2gText, setS2GText] = useState("65");
@@ -800,22 +812,22 @@ const [err, setErr] = useState("");
   };
 
   const onChangeStartIso = (iso) => {
-  if (!iso) return;
+    if (!iso) return;
 
-  let next = clampISODate(iso, minISO, maxISO);
-  next = snapToNearestAvailable(next);
+    let next = clampISODate(iso, minISO, maxISO);
+    next = snapToNearestAvailable(next);
 
-  if (next !== startIso) setStartIso(next);
-};
+    if (next !== startIso) setStartIso(next);
+  };
 
   const onChangeEndIso = (iso) => {
-  if (!iso) return;
+    if (!iso) return;
 
-  let next = clampISODate(iso, minISO, maxISO);
-  next = snapToNearestAvailable(next);
+    let next = clampISODate(iso, minISO, maxISO);
+    next = snapToNearestAvailable(next);
 
-  if (next !== endIso) setEndIso(next);
-};
+    if (next !== endIso) setEndIso(next);
+  };
 
   const { startIsoAdj, endIsoAdj } = useMemo(() => {
     return { startIsoAdj: sanitizeIso(startIso), endIsoAdj: sanitizeIso(endIso) };
@@ -1164,37 +1176,39 @@ const [err, setErr] = useState("");
 
         .gsr-stepper{ position: relative; width: 100%; }
 
-.gsr-stepperInput{
-  /* reserve equal space left+right so the value is truly centered */
-  padding-left: 38px;
-  padding-right: 38px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-}
+        .gsr-stepperInput{
+          /* reserve equal space left+right so the value is truly centered */
+          padding-left: 38px;
+          padding-right: 38px;
+          text-align: center;
+          font-variant-numeric: tabular-nums;
+        }
 
-/* always show the custom buttons (desktop + mobile) */
-.gsr-stepperBtns{
-  position:absolute; right: 8px; top: 50%; transform: translateY(-50%);
-  display: flex; flex-direction: column; gap: 4px; z-index: 2;
-}
+        /* always show the custom buttons (desktop + mobile) */
+        .gsr-stepperBtns{
+          position:absolute; right: 8px; top: 50%; transform: translateY(-50%);
+          display: flex; flex-direction: column; gap: 4px; z-index: 2;
+        }
 
-.gsr-stepBtn{
-  width: 26px; height: 16px; border-radius: 10px; border: 0;
-  background: rgba(11,27,42,0.10); color: #0b1b2a;
-  font-weight: 1000; font-size: 11px; line-height: 16px;
-  cursor: pointer; padding: 0;
-  display:flex; align-items:center; justify-content:center; user-select:none;
-}
+        .gsr-stepBtn{
+          width: 26px; height: 16px; border-radius: 10px; border: 0;
+          background: rgba(11,27,42,0.10); color: #0b1b2a;
+          font-weight: 1000; font-size: 11px; line-height: 16px;
+          cursor: pointer; padding: 0;
+          display:flex; align-items:center; justify-content:center; user-select:none;
+        }
 
-/* just in case: remove native spinners if type=number ever returns */
-.gsr-pillNumber::-webkit-outer-spin-button,
-.gsr-pillNumber::-webkit-inner-spin-button{
-  -webkit-appearance: none;
-  margin: 0;
-}
-.gsr-pillNumber{
-  -moz-appearance: textfield;
-}.gsr-datePills{
+        /* just in case: remove native spinners if type=number ever returns */
+        .gsr-pillNumber::-webkit-outer-spin-button,
+        .gsr-pillNumber::-webkit-inner-spin-button{
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        .gsr-pillNumber{
+          -moz-appearance: textfield;
+        }
+
+        .gsr-datePills{
           height: var(--ctrlH);
           width: 100%;
           display:flex;
@@ -1348,7 +1362,12 @@ const [err, setErr] = useState("");
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
-            <select className="gsr-pill gsr-pillSelect gsr-pill--small" value={startMetal} onChange={(e) => setStartMetal(clampISODate(e.target.value, minISO, maxISO))}>
+            {/* ✅ BUG FIX: do NOT clamp as date; just set the string value */}
+            <select
+              className="gsr-pill gsr-pillSelect gsr-pill--small"
+              value={startMetal}
+              onChange={(e) => setStartMetal(e.target.value)}
+            >
               <option value="gold">Gold</option>
               <option value="silver">Silver</option>
             </select>
@@ -1454,7 +1473,7 @@ const [err, setErr] = useState("");
 
                 <div className="gsr-muted">
                   Switches:
-                  <InfoTip id="p_switches" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of switches between Gold and Silver based on your thresholds." />
+                  <InfoTip id="p_switches" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Number of switches between Gold and Silver based on your thresholds." />
                 </div>
                 <div className="right gsr-strong">{fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}</div>
               </div>
@@ -1569,34 +1588,3 @@ const [err, setErr] = useState("");
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
