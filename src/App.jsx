@@ -131,6 +131,11 @@ const PRICE_SCALE = 1_000_000n; // micro USD
 const CENTS_TO_MICRO = 10_000n; // 1 cent = 10,000 micro USD
 const OZ_SCALE = 1_000_000_000_000n; // 1e12
 
+// ---- grams support (deterministic BigInt) ----
+// 1 troy ounce = 31.1034768 grams
+const GRAMS_SCALE = 10_000_000n; // 1e7 => 0.0000001 g precision
+const GRAMS_PER_OZ_SCALED = 311_034_768n; // 31.1034768 * 1e7
+
 const bi = (x) => BigInt(x);
 
 const divRoundHalfUp = (num, den) => {
@@ -170,6 +175,26 @@ const applyFee97pct = (usdCents) => divRoundHalfUp(bi(usdCents) * 97n, 100n);
 
 const centsToRoundedDollars = (cents) => divRoundHalfUp(bi(cents), 100n);
 const fmtMoney0 = (cents) => `$${fmtInt(centsToRoundedDollars(cents))}`;
+
+// ---- grams helpers ----
+const ouncesScaledToGramsScaled = (ozScaled) =>
+  divRoundHalfUp(bi(ozScaled) * GRAMS_PER_OZ_SCALED, OZ_SCALE);
+
+const fmtScaled2 = (scaled, scale) => {
+  if (scaled == null) return "0.00";
+  const neg = scaled < 0n;
+  const a = neg ? -scaled : scaled;
+
+  // Round to 2dp in "scale" units
+  const c2 = divRoundHalfUp(a * 100n, scale); // hundredths
+  let intPart = c2 / 100n;
+  const frac2 = c2 % 100n;
+
+  const out = `${fmtInt(intPart)}.${String(frac2).padStart(2, "0")}`;
+  return neg ? `-${out}` : out;
+};
+
+const fmtGrams = (gramsScaled) => `${fmtScaled2(gramsScaled, GRAMS_SCALE)} g`;
 
 /* -------- ticks -------- */
 function niceTicks(min, max, target = 7) {
@@ -879,7 +904,7 @@ export default function App() {
   }, [windowed, amount]);
 
   const withStrategy = useMemo(() => {
-    if (!valuedRows.length) return { data: [], endsIn: "gold" };
+    if (!valuedRows.length) return { data: [], endsIn: "gold", endOzGoldScaled: 0n, endOzSilverScaled: 0n };
 
     const amountCents = bi(amount) * 100n;
     let metal = startMetal === "silver" ? "silver" : "gold";
@@ -924,7 +949,14 @@ export default function App() {
       return { ...r, stratCents, strat: Number(stratCents) / 100, switches: switchesCount, stratMetal: metal };
     });
 
-    return { data: out, endsIn: out[out.length - 1]?.stratMetal || metal };
+    const endsIn = out[out.length - 1]?.stratMetal || metal;
+
+    return {
+      data: out,
+      endsIn,
+      endOzGoldScaled: ozGoldScaled,
+      endOzSilverScaled: ozSilverScaled,
+    };
   }, [valuedRows, amount, g2s, s2g, startMetal]);
 
   const data = withStrategy.data;
@@ -949,6 +981,29 @@ export default function App() {
   const stats = useMemo(() => {
     const amountCents = bi(amount) * 100n;
 
+    // ---- grams for buy&hold (Gold/Silver) based on start date price ----
+    let gGrams = 0n;
+    let sGrams = 0n;
+    const startRow = startIsoAdj ? dateMap.get(startIsoAdj) : null;
+    if (startRow) {
+      const gMicro0 = toPriceMicro(startRow.gold);
+      const sMicro0 = toPriceMicro(startRow.silver);
+      if (gMicro0) {
+        const gOz = usdCentsToOuncesScaled(amountCents, gMicro0);
+        gGrams = ouncesScaledToGramsScaled(gOz);
+      }
+      if (sMicro0) {
+        const sOz = usdCentsToOuncesScaled(amountCents, sMicro0);
+        sGrams = ouncesScaledToGramsScaled(sOz);
+      }
+    }
+
+    // ---- grams for portfolio: show grams of the metal you end in ----
+    const endMetal = (withStrategy.endsIn || "gold") === "silver" ? "silver" : "gold";
+    const endOz =
+      endMetal === "gold" ? (withStrategy.endOzGoldScaled ?? 0n) : (withStrategy.endOzSilverScaled ?? 0n);
+    const pGrams = ouncesScaledToGramsScaled(endOz);
+
     if (!data.length) {
       return {
         gvC: amountCents,
@@ -966,6 +1021,10 @@ export default function App() {
         pBeatsG: 0,
         pBeatsS: 0,
         endsIn: "GOLD",
+        endMetal,
+        gGrams,
+        sGrams,
+        pGrams,
       };
     }
 
@@ -1010,9 +1069,17 @@ export default function App() {
       diffPg, diffPs,
       switches: end.switches ?? 0,
       pBeatsG, pBeatsS,
-      endsIn: (withStrategy.endsIn || "gold").toUpperCase(),
+      endsIn: endMetal.toUpperCase(),
+      endMetal,
+      gGrams,
+      sGrams,
+      pGrams,
     };
-  }, [data, amount, withStrategy.endsIn]);
+  }, [data, amount, withStrategy.endsIn, withStrategy.endOzGoldScaled, withStrategy.endOzSilverScaled, startIsoAdj, dateMap]);
+
+  // --- for colored "Gold/Silver" text (matches your chart legend colors) ---
+  const endMetalLabel = stats.endMetal === "silver" ? "Silver" : "Gold";
+  const endMetalColor = stats.endMetal === "silver" ? "#0e2d4a" : "#f2c36b";
 
   const { usdDomain, usdTicks } = useMemo(() => {
     if (!data.length) return { usdDomain: ["auto", "auto"], usdTicks: undefined };
@@ -1177,14 +1244,12 @@ export default function App() {
         .gsr-stepper{ position: relative; width: 100%; }
 
         .gsr-stepperInput{
-          /* reserve equal space left+right so the value is truly centered */
           padding-left: 38px;
           padding-right: 38px;
           text-align: center;
           font-variant-numeric: tabular-nums;
         }
 
-        /* always show the custom buttons (desktop + mobile) */
         .gsr-stepperBtns{
           position:absolute; right: 8px; top: 50%; transform: translateY(-50%);
           display: flex; flex-direction: column; gap: 4px; z-index: 2;
@@ -1198,15 +1263,12 @@ export default function App() {
           display:flex; align-items:center; justify-content:center; user-select:none;
         }
 
-        /* just in case: remove native spinners if type=number ever returns */
         .gsr-pillNumber::-webkit-outer-spin-button,
         .gsr-pillNumber::-webkit-inner-spin-button{
           -webkit-appearance: none;
           margin: 0;
         }
-        .gsr-pillNumber{
-          -moz-appearance: textfield;
-        }
+        .gsr-pillNumber{ -moz-appearance: textfield; }
 
         .gsr-datePills{
           height: var(--ctrlH);
@@ -1362,7 +1424,6 @@ export default function App() {
 
           <div className="gsr-control">
             <span className="gsr-label">Start Metal</span>
-            {/* ✅ BUG FIX: do NOT clamp as date; just set the string value */}
             <select
               className="gsr-pill gsr-pillSelect gsr-pill--small"
               value={startMetal}
@@ -1389,9 +1450,7 @@ export default function App() {
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
                     <span className="gsr-muted">
-                      Change:
-                      <InfoTip id="gold_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
-                    </span>
+                      Grams:</span>
                     <span className="gsr-strong">{fmtMoney0(stats.gchgC)}</span>
                   </div>
                   <div className="gsr-row">
@@ -1400,6 +1459,19 @@ export default function App() {
                       <InfoTip id="gold_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
+                  </div>
+
+                  {/* ✅ grams at end of Gold box */}
+                  <div className="gsr-row">
+                    <span className="gsr-muted">
+                      Grams:
+                      
+                    
+                      
+                      
+                      <InfoTip id="gold_grams" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of grams purchased on the start date." />
+                      </span>
+                    <span className="gsr-strong">{fmtGrams(stats.gGrams)}</span>
                   </div>
                 </div>
               </div>
@@ -1423,6 +1495,15 @@ export default function App() {
                       <InfoTip id="silver_return" activeId={activeTipId} setActiveId={setActiveTipId} text="Percentage return for the selected period." />
                     </span>
                     <span className="gsr-strong">{fmt0(stats.spct)}%</span>
+                  </div>
+
+                  {/* ✅ grams at end of Silver box */}
+                  <div className="gsr-row">
+                    <span className="gsr-muted">
+                      Grams:
+                      <InfoTip id="silver_grams" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of grams purchased on the start date." />
+                    </span>
+                    <span className="gsr-strong">{fmtGrams(stats.sGrams)}</span>
                   </div>
                 </div>
               </div>
@@ -1473,9 +1554,24 @@ export default function App() {
 
                 <div className="gsr-muted">
                   Switches:
-                  <InfoTip id="p_switches" activeId={activeTipId} setActiveTipId={setActiveTipId} text="Number of switches between Gold and Silver based on your thresholds." />
+                  <InfoTip id="p_switches" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of switches between Gold and Silver based on your thresholds." />
                 </div>
-                <div className="right gsr-strong">{fmt0(stats.switches)} &nbsp; <span className="gsr-muted">Ends in:</span> {stats.endsIn}</div>
+                <div className="right gsr-strong">
+                  {fmt0(stats.switches)} &nbsp;
+                  <span className="gsr-muted">Ends in:</span>{" "}
+                  <span style={{ color: endMetalColor, fontWeight: 1000 }}>{endMetalLabel}</span>
+                </div>
+
+                {/* ✅ grams at end of My Portfolio box (metal you end in) */}
+               <div className="gsr-muted">
+  Grams
+  <span style={{ color: endMetalColor, fontWeight: 1000, marginLeft: 6 }}>
+    {endMetalLabel}
+  </span>:
+  <InfoTip id="p_grams" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of grams of your current metal after switching at your thresholds." />
+                </div>
+              
+                <div className="right gsr-strong">{fmtGrams(stats.pGrams)}</div>
               </div>
             </div>
           </div>
@@ -1588,3 +1684,10 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
