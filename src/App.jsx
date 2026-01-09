@@ -1443,16 +1443,19 @@ export default function App() {
         {/* cards */}
         <section className="gsr-cards">
           <div className="gsr-leftStack">
-            <div className="gsr-card">
+                        <div className="gsr-card">
               <div className="gsr-cardTitle">Gold</div>
               <div className="gsr-cardValue">{fmtMoney0(stats.gvC)}</div>
               <div className="gsr-cardInner">
                 <div className="gsr-twoLine">
                   <div className="gsr-row">
                     <span className="gsr-muted">
-                      Grams:</span>
+                      Change:
+                      <InfoTip id="gold_change" activeId={activeTipId} setActiveId={setActiveTipId} text="Change in value (USD) for the selected period." />
+                    </span>
                     <span className="gsr-strong">{fmtMoney0(stats.gchgC)}</span>
                   </div>
+
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Return:
@@ -1461,23 +1464,17 @@ export default function App() {
                     <span className="gsr-strong">{fmt0(stats.gpct)}%</span>
                   </div>
 
-                  {/* ✅ grams at end of Gold box */}
                   <div className="gsr-row">
                     <span className="gsr-muted">
                       Grams:
-                      
-                    
-                      
-                      
                       <InfoTip id="gold_grams" activeId={activeTipId} setActiveId={setActiveTipId} text="Number of grams purchased on the start date." />
-                      </span>
+                    </span>
                     <span className="gsr-strong">{fmtGrams(stats.gGrams)}</span>
                   </div>
                 </div>
               </div>
             </div>
-
-            <div className="gsr-card">
+<div className="gsr-card">
               <div className="gsr-cardTitle">Silver</div>
               <div className="gsr-cardValue">{fmtMoney0(stats.svC)}</div>
               <div className="gsr-cardInner">
@@ -1684,6 +1681,13 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
 
 
 
